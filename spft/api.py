@@ -2,6 +2,7 @@ import types
 from functools import partial
 from typing import Dict, Optional, Tuple, Union, List
 
+import json
 import torch
 from torch import nn
 from transformers import TrainerCallback
@@ -102,12 +103,16 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
             elif config.skip_output_tokens: 
                 #* Left Bounds
                 is_ctx = (labels == -100)  # shape (B, S)
+                
+                # cumprod can be replaced with cumsum if needed
+                # left_lengths = is_ctx.cumsum(dim=1)
                 left_lengths = is_ctx.cumprod(dim=1).sum(dim=1)
                 min_left = left_lengths.min().item()
                 
                 #* Right Bounds
                 right_lengths = is_ctx.flip(dims=[1]).cumprod(dim=1).sum(dim=1).min().item()
                 min_right = labels.shape[-1] - right_lengths if right_lengths > 0 else labels.shape[-1]
+                # min_right = labels.shape[-1]
             
                 # Tokens Orders: [...., min_left, output tokens, min_right, ...]
                 masks[..., min_left :min_right] = True
@@ -185,6 +190,8 @@ def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str
     peft.tuners.lora.Linear4bit.forward = lora4bit_forward
     
     _enable_unsloth = kwargs.get("enable_unsloth", False)
+    _enable_static = kwargs.get("enable_static", False)
+    channel_acts = kwargs.get("channel_acts", None)
     io.rank0_print(f"Patching SparseLoRA onto {'Unsloth' if _enable_unsloth else 'HF'} model")
     
     MODEL_MAPPING = get_module_mapping(config, enable_unsloth=_enable_unsloth)
@@ -204,7 +211,9 @@ def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str
         for name, module in model.named_modules():
             l_name, sparsity = next(((suffix, val) for suffix, val in config.sparsity.items() if name.endswith(suffix)), (None, None))
             if sparsity is not None:
-                kwargs = {"name": l_name, "idx":int(l_name.split(".")[1]), "sparsity": sparsity, "cfg": config}
+                kwargs = {"name": l_name, "idx":int(l_name.split(".")[1]), "sparsity": sparsity, "cfg": config, "enable_static": _enable_static}
+                if sparsity > 0 and channel_acts is not None and name in channel_acts:
+                    kwargs["channel_act"] = channel_acts[name]
                 if type(module) in MODEL_MAPPING:
                     set_submodule(model, name, MODEL_MAPPING[type(module)](base=module, **kwargs))
                 svd_estimators_loaded += 1
@@ -223,3 +232,40 @@ def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str
 
 def get_spft_callback(config: SPFTConfig) -> TrainerCallback:
     return SPFTCallback(start_step=config.start_step, end_step=config.end_step)
+
+
+def get_channel_act(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str]) -> Dict[str, List[float]]:
+    #* Patching the forward method of lora module
+    from .modules import get_module_mapping
+    
+    MODEL_MAPPING = get_module_mapping(config, enable_unsloth=False)
+
+    mapped_modules = set(MODEL_MAPPING.values())
+    
+    module_name2channel_act = {}
+    
+    for name, module in model.named_modules():
+        if type(module) in mapped_modules and hasattr(module, "channel_act"):
+            if isinstance(module.channel_act, torch.Tensor):
+                module_name2channel_act[name] = module.channel_act.tolist()
+            elif isinstance(module.channel_act, dict):
+                for sub_name, sub_act in module.channel_act.items():
+                    module.channel_act[sub_name] = sub_act.tolist() if isinstance(sub_act, torch.Tensor) else sub_act            
+                module_name2channel_act[name] = module.channel_act              
+    return module_name2channel_act
+
+
+def load_channel_act_file(file_path: str) -> Dict[str, List[float]]:
+    """
+    Load activation channel configuration from a file.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Activation channel configuration file not found: {file_path}")
+    
+    with open(file_path, 'r') as f:
+        channel_act = json.load(f)
+
+    if not isinstance(channel_act, dict):
+        raise ValueError("Activation channel configuration must be a dictionary.")
+    
+    return channel_act

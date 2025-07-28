@@ -1,4 +1,5 @@
 import os
+import argparse
 import torch
 from torch import distributed as dist
 
@@ -16,7 +17,7 @@ else:
          
 import transformers
 from transformers import HfArgumentParser, set_seed
-from spft.api import SPFTConfig, get_spft_callback, get_spft_model
+from spft.api import SPFTConfig, get_spft_callback, get_spft_model, get_channel_act, load_channel_act_file
 from spft.callbacks import EvaluateFirstStepCallback
 from spft.train.args import DataTrainingArguments, ModelArguments, TrainingArguments
 from spft.utils.io import build_runname
@@ -24,10 +25,11 @@ import yaml
 import sys
 import subprocess
 from spft.utils.data import load_dataset_by_name
+from spft.utils.arg_parser import parse_args
 
 
-def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_args: TrainingArguments, cli_keys: set) -> None:    # Set up SPFT
-    
+def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_args: TrainingArguments, remaining_args: argparse.Namespace, cli_keys: set) -> None:    # Set up SPFT
+
     if training_args.enable_unsloth:
         #? Unsloth only patches if LoRA module present on component.
         training_args.lora_target_modules = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
@@ -41,6 +43,8 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
     base_path = f"{training_args.output_dir}/{peft_name}/{training_args.run_name}/"
     training_args.output_dir = f"{base_path}{training_args.seed}/"
     spft_config.write_out(training_args.output_dir)
+    channel_acts = load_channel_act_file(remaining_args.act_channel) if hasattr(remaining_args, 'act_channel') else None
+    enable_static = getattr(remaining_args, 'enable_static', False)
     
     if not training_args.eval_only:
         from spft.utils.model import create_model_and_tokenizer
@@ -51,7 +55,9 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
         spft_config.padding_side = tokenizer.padding_side
         
         callbacks = []
-        model = get_spft_model(model, spft_config, enable_unsloth=training_args.enable_unsloth)
+        model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
+                               enable_static=enable_static, 
+                               enable_unsloth=training_args.enable_unsloth)
         callbacks.append(get_spft_callback(spft_config))
         model = model.to(torch.bfloat16)
         
@@ -87,7 +93,14 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
         )    
         
         trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
-        
+
+        channel_acts = get_channel_act(model, spft_config)
+
+        if len(channel_acts) > 0:
+            import json
+            with open(os.path.join(training_args.output_dir, "channel_acts.json"), "w") as f:
+                json.dump(channel_acts, f, indent=4)
+
         if "wizardlm" in data_args.dataset.lower():
             #* Save the model
             print(f"[INFO] Saving fulll model for chat: {training_args.output_dir}")
@@ -103,7 +116,7 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
             trainer.save_model(output_dir=training_args.output_dir)
             trainer.save_state()
     
-    else: 
+    if training_args.eval_only or training_args.do_eval: 
         if "wizardlm" in data_args.dataset.lower():
             print(f"[INFO] Skipping Eval. Test for chat model must be conducted using FastChat")
             return
@@ -185,6 +198,8 @@ if __name__ == "__main__":
     model_args, data_args, training_args, remaining_args = parser.parse_args_into_dataclasses(return_remaining_strings=True)
     
     set_seed(training_args.seed)
+
+    remaining_args = parse_args(remaining_args) if remaining_args else remaining_args
     
-    main(model_args, data_args, training_args, cli_spft_keys)
+    main(model_args, data_args, training_args, remaining_args, cli_spft_keys)
 

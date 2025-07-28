@@ -62,6 +62,6 @@ class SparseModule(nn.Module):
             res[~masks] = sparse.view(-1, sparse.shape[-1])
         else:
             #* Token Order: [Sparse | Dense] --> [In | Out]
-            res = torch.cat([sparse, dense], dim=1).contiguous()
+            res = torch.cat([sparse, dense], dim=1)
         return res.contiguous()
         

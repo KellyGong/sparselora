@@ -28,16 +28,29 @@ class SparseLlamaFlashAttention(SparseModule):
         "_flash_attn_uses_top_left_mask",
     ]
 
-    def __init__(self, base: nn.Module, *, name: str, idx: int, sparsity: float = 0, cfg) -> None:
+    def __init__(self, base: nn.Module, *, name: str, idx: int, sparsity: float = 0, cfg, **kwargs) -> None:
         super().__init__(base)
         self.sparsity = sparsity
         self.layer_name = name
         self.layer_idx = idx #base.layer_idx
         if self.sparsity > 0:
             self.load_predictor(base,cfg)
-        
+            self.enable_static = kwargs.get("enable_static", False)
+            if self.enable_static:
+                channel_act = kwargs.get("channel_act", None)
+                if channel_act is None:
+                    self.channel_act = {
+                        "q": torch.zeros(base.q_proj.base_layer.out_features),
+                        "k": torch.zeros(base.k_proj.base_layer.out_features),
+                        "v": torch.zeros(base.v_proj.base_layer.out_features),
+                    }
+                else:
+                    self.channel_act = channel_act
+                    for key, value in self.channel_act.items():
+                        self.channel_act[key] = torch.tensor(value)
+                    self.static_indices = {key: torch.topk(value, int(value.shape[0] * (1 - self.sparsity)), sorted=False).indices.to('cuda') 
+                                           for key, value in channel_act.items()}
         self.per_channel = not cfg.qk_per_head
-
 
     def kernel_proj_o_forward(self, x, masks, vo_indices):
         
@@ -273,19 +286,27 @@ class SparseLlamaFlashAttention(SparseModule):
                 "make sure to use `sdpa` in the mean time, and open an issue at https://github.com/huggingface/transformers"
             )
         
-        output_attentions = False
-
         bsz, q_len, _ = hidden_states.size()
         
 
-        if self.enabled and self.sparsity > 0:
+        if self.enabled and self.sparsity > 0 and q_len > 1:
+
+            # q_len > 1 is the prefill phase
             
             if self.mode == "svd":
                 
-                indices  = self.pred_attn(hidden_states)
-                query_states, key_states, value_states = self.kernel_proj_forward(hidden_states, masks, indices)
+                if not hasattr(self, "static_indices"):
+                    indices = self.pred_attn(hidden_states)
+                    query_states, key_states, value_states = self.kernel_proj_forward(hidden_states, masks, indices)
+
+                    if self.enable_static:
+                        for zip_key, indice in zip(self.channel_act.keys(), indices):
+                            self.channel_act[zip_key][indice.to('cpu')] += 1.0
                 
-                
+                else:
+                    indices = (self.static_indices["q"], self.static_indices["k"], self.static_indices["v"])
+                    query_states, key_states, value_states = self.kernel_proj_forward(hidden_states, masks, indices)
+
             elif "oracle" in self.mode: 
                 query_states, key_states, value_states = self.q_proj(hidden_states), self.k_proj(hidden_states), self.v_proj(hidden_states)
                 with torch.no_grad():
@@ -297,7 +318,6 @@ class SparseLlamaFlashAttention(SparseModule):
             vo_indices = indices[2]
             
         else:
-            
             query_states = self.q_proj(hidden_states)
             key_states = self.k_proj(hidden_states)
             value_states = self.v_proj(hidden_states)
@@ -314,10 +334,13 @@ class SparseLlamaFlashAttention(SparseModule):
     
         query_states, key_states = liger_rotary_pos_emb(query_states, key_states, cos, sin, unsqueeze_dim=1)
         
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        
         query_states = query_states.transpose(1, 2)
         key_states = key_states.transpose(1, 2)
         value_states = value_states.transpose(1, 2)
-        
         
         attn_output = _flash_attention_forward(
             query_states,
@@ -335,7 +358,7 @@ class SparseLlamaFlashAttention(SparseModule):
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
             
             
-        if self.enabled and self.sparsity > 0 and self.mode == "svd":
+        if self.enabled and self.sparsity > 0 and self.mode == "svd" and q_len > 1:
             
             if self.mode == "svd":
                 attn_output = self.kernel_proj_o_forward(attn_output, masks, vo_indices)
@@ -345,9 +368,5 @@ class SparseLlamaFlashAttention(SparseModule):
             
         else:
             attn_output = self.o_proj(attn_output)
-        
-            
-        if not output_attentions:
-            attn_weights = None
 
-        return attn_output, attn_weights, past_key_value
+        return attn_output, None, past_key_value
