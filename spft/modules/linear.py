@@ -14,6 +14,7 @@ class SparseLinear(nn.Linear):
         self.mode = mode
         self.sparse_lora_branch = config.sparse_lora_branch
     
+    # sparse_indices: Optional[torch.Tensor] = None,
     def forward(self, x: torch.Tensor, sparse_indices: Optional[torch.Tensor] = None, **kwargs: Any) -> torch.Tensor:
         x = x.contiguous()
         if sparse_indices is None or self.mode is None: #dense
@@ -62,8 +63,10 @@ def lora_forward(self, x: torch.Tensor, indices: Optional[torch.Tensor] = None, 
         x = x.to(lora_A.weight.dtype)
 
         if not self.use_dora[active_adapter]: #* Implement Changes Here (pass *args/**kwargs)
-            x = lora_A(x, indices, *args, **kwargs)
-            x = lora_B(x, indices, *args, **kwargs)
+            # x = lora_A(x, indices, *args, **kwargs)
+            # x = lora_B(x, indices, *args, **kwargs)
+            x = lora_A(x, indices)
+            x = lora_B(x, indices)
             result = torch.add(result, x, alpha=scaling)
             
             if indices is not None and self.base_layer.sparse_lora_branch:

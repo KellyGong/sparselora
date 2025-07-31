@@ -1,10 +1,9 @@
 
-source scripts/setup/setup.sh
+# source scripts/setup/setup.sh
 MODEL=${1:-"NousResearch/Meta-Llama-3-8B-Instruct"}
 
 CONFIGS=(
     "llama3-8b-glue.yaml"
-
 )
 
 
@@ -22,7 +21,7 @@ TASKS=(
     wnli
 )
 
-SEEDS=(42 43 44 45 46)
+SEEDS=(42)
 
 for TASK_NAME in ${TASKS[@]}
 do
@@ -42,9 +41,9 @@ do
             fi
 
 
-            torchrun --nproc_per_node=8 \
+            CUDA_VISIBLE_DEVICES=1 python \
                 spft/train/run_glue.py \
-                --report_to wandb \
+                --report_to none \
                 --output_dir $CHECKPOINT_PATH \
                 --seed $SEED \
                 --model_name_or_path $MODEL \
