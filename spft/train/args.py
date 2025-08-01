@@ -11,8 +11,7 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_r: int = field(default=32)
     lora_alpha: int = field(default=64)
     lora_dropout: Optional[float] = field(default=0) #0.05)
-    # lora_target_modules: Optional[str] = field(default="q_proj,k_proj,v_proj,o_proj")
-    lora_target_modules: Optional[str] = field(default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj")
+    lora_target_modules: Optional[str] = field(default="q_proj,k_proj,v_proj,o_proj")
 
     spft: Optional[str] = field(default=None)
     spft_mode: Optional[str] = field(default="none")
@@ -27,7 +26,9 @@ class TrainingArguments(transformers.TrainingArguments):
     spft_qkvo_seq_avg: bool = field(default=False)
     spft_mlp_seq_avg: bool = field(default=True)
     spft_sparse_output_tokens: float = field(default=0)
-    
+
+    reft_prefix: int = field(default=7)    
+    reft_suffix: int = field(default=7)
     
     eval_only: bool = field(default=False)
     #* Store action true

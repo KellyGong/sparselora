@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch
 from typing import Optional
 from .svd import create_mlp_svd_pred, create_attn_svd_pred
-__all__ = ["SparseModule"]
+__all__ = ["SparseModule", "reft_forward", "indice_gen"]
 
 
 class SparseModule(nn.Module):
@@ -43,7 +43,7 @@ class SparseModule(nn.Module):
     def token_splits(self, x: torch.Tensor, masks: Optional[torch.Tensor] = None) -> torch.Tensor:
         #?@ Fix here!
         if isinstance(masks, tuple):
-            masks, id_split = masks
+            masks, id_split, _, _ = masks
             sparse_x = x[:, :id_split, :]
             dense_x = x[:, id_split:, :]
         else:
@@ -64,4 +64,32 @@ class SparseModule(nn.Module):
             #* Token Order: [Sparse | Dense] --> [In | Out]
             res = torch.cat([sparse, dense], dim=1)
         return res.contiguous()
-        
+
+
+def indice_gen(begin_s: torch.Tensor, prefix: int, direction: bool = True) -> torch.Tensor:
+    # begin_s include the first bos token position in each sequence
+    offset = torch.arange(prefix, device=begin_s.device)
+
+    if not direction:
+        offset = offset - prefix
+    
+    return begin_s.unsqueeze(1) + offset
+
+def reft_forward(x: torch.Tensor, begin_s: torch.Tensor, end_s: torch.Tensor, reft_model: nn.Sequential) -> torch.Tensor:
+    """
+    Reft forward pass.
+    """
+
+    begin_s_indice = begin_s.unsqueeze(-1).expand(-1, -1, x.shape[-1])
+    
+    end_s_indice = end_s.unsqueeze(-1).expand(-1, -1, x.shape[-1])
+
+    prefix_input = torch.gather(x, 1, begin_s_indice)
+    suffix_output = torch.gather(x, 1, end_s_indice)
+
+    x = torch.scatter_add(x, 1, begin_s_indice, reft_model(prefix_input))
+    x = torch.scatter_add(x, 1, end_s_indice, reft_model(suffix_output))
+    # x = x.scatter_add_(1, begin_s_indice, reft_model(prefix_input))
+    # x = x.scatter_add_(1, end_s_indice, reft_model(suffix_output))
+
+    return x

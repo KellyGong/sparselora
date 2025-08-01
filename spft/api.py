@@ -10,7 +10,7 @@ from spft.train.args import DataTrainingArguments, ModelArguments, TrainingArgum
 from transformers.modeling_outputs import CausalLMOutputWithPast
 import os
 from .callbacks import SPFTCallback
-from .modules import SPARSITY_MAPPING, SparseModule
+from .modules import SPARSITY_MAPPING, SparseModule, SPARSITY_MAPPING_REFT, indice_gen
 from .utils import io, set_submodule
 import peft
 from tqdm import tqdm
@@ -76,10 +76,13 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         masks = None
+        # if type(input_ids) is dict and attention_mask is None:
+        #     assert "input_ids" in input_ids and "attention_mask" in input_ids, "input_ids and attention_mask must be provided in a dictionary."
+        #     attention_mask = input_ids["attention_mask"]
+        #     input_ids = input_ids["input_ids"]
 
         if labels is not None:
             masks = torch.zeros_like(input_ids, dtype=torch.bool)
-            
                 
             if config.skip_random_tokens:
                 min_sparse_len = (labels == -100).sum(dim=-1).min().item()
@@ -108,6 +111,7 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
                 # left_lengths = is_ctx.cumsum(dim=1)
                 left_lengths = is_ctx.cumprod(dim=1).sum(dim=1)
                 min_left = left_lengths.min().item()
+                bos_indices = (input_ids == config.BOS_ID).nonzero(as_tuple=True)[1]
                 
                 #* Right Bounds
                 right_lengths = is_ctx.flip(dims=[1]).cumprod(dim=1).sum(dim=1).min().item()
@@ -138,11 +142,10 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
                 
                 elif config.padding_side == "left":
                     #* No dense output tokens & left-padding:
-                    masks = (masks, min_left) #* For easy slicing.
+                    masks = (masks, min_left, indice_gen(bos_indices, config.reft_prefix, True), indice_gen(left_lengths, config.reft_suffix, False)) #* For easy slicing.
                 
             if not (config.skip_sink_tokens or config.skip_output_tokens or config.skip_random_tokens):
                 masks = None
-            
 
         for module in self.model.modules():
             if isinstance(module, SparseModule):
@@ -183,21 +186,29 @@ def _patch_spft_generate(model: nn.Module, config: SPFTConfig) -> None:
     
 
 
-def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str]) -> nn.Module:
+def get_spft_model(model: nn.Module, config: SPFTConfig, training_args, **kwargs: Dict[str, str]) -> nn.Module:
     #* Patching the forward method of lora module
     from .modules import get_module_mapping, lora_forward, lora4bit_forward
-    peft.tuners.lora.layer.Linear.forward = lora_forward
     peft.tuners.lora.Linear4bit.forward = lora4bit_forward
+    peft.tuners.lora.layer.Linear.forward = lora_forward
     
     _enable_unsloth = kwargs.get("enable_unsloth", False)
     _enable_static = kwargs.get("enable_static", False)
     channel_acts = kwargs.get("channel_acts", None)
+    reft = kwargs.get("reft", False)
+
+    sparse_mapping = SPARSITY_MAPPING_REFT if reft else SPARSITY_MAPPING
+
     io.rank0_print(f"Patching SparseLoRA onto {'Unsloth' if _enable_unsloth else 'HF'} model")
     
     MODEL_MAPPING = get_module_mapping(config, enable_unsloth=_enable_unsloth)
     
     if _enable_unsloth:
         assert not config.sparse_lora_branch, "Unsloth currently only supports sparsity on base branches. Please set `sparse_lora_branch` to False."
+    
+    if reft:
+        for param in model.parameters():
+            param.requires_grad = False
         
     svd_estimators_loaded = 0
     total_modules = sum(1 for _ in model.named_modules())
@@ -211,15 +222,15 @@ def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str
         for name, module in model.named_modules():
             l_name, sparsity = next(((suffix, val) for suffix, val in config.sparsity.items() if name.endswith(suffix)), (None, None))
             if sparsity is not None:
-                kwargs = {"name": l_name, "idx":int(l_name.split(".")[1]), "sparsity": sparsity, "cfg": config, "enable_static": _enable_static}
+                kwargs_module = {"name": l_name, "idx":int(l_name.split(".")[1]), "sparsity": sparsity, "cfg": config, "enable_static": _enable_static, "reft": reft, "rank": training_args.lora_r, "prefix": training_args.reft_prefix, "suffix": training_args.reft_suffix}
                 if sparsity > 0 and channel_acts is not None and name in channel_acts:
-                    kwargs["channel_act"] = channel_acts[name]
+                    kwargs_module["channel_act"] = channel_acts[name]
                 if type(module) in MODEL_MAPPING:
-                    set_submodule(model, name, MODEL_MAPPING[type(module)](base=module, **kwargs))
+                    set_submodule(model, name, MODEL_MAPPING[type(module)](base=module, **kwargs_module))
                 svd_estimators_loaded += 1
                 for sub_name, sub_module in module.named_modules():
                     if isinstance(sub_module, nn.Linear):
-                        mode = None if "lora_" in sub_name and not config.sparse_lora_branch else SPARSITY_MAPPING.get(sub_name, None)
+                        mode = None if "lora_" in sub_name and not config.sparse_lora_branch else sparse_mapping.get(sub_name, None)
                         set_submodule(model, f"{name}.{sub_name}", MODEL_MAPPING[type(sub_module)](base=sub_module, mode=mode, config=config))
                         svd_estimators_loaded += 1
             pbar.update(1)

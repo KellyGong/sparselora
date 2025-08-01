@@ -14,7 +14,8 @@ if world_size == 1 or rank == 0:
         print("[WARNING] Unsloth import failed.")
 else:
    print("Unsloth is not available in distributed mode. If you are training with unsloth please run in single process mode.") 
-         
+
+import pyreft
 import transformers
 from transformers import HfArgumentParser, set_seed
 from spft.api import SPFTConfig, get_spft_callback, get_spft_model, get_channel_act, load_channel_act_file
@@ -45,23 +46,28 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
     spft_config.write_out(training_args.output_dir)
     channel_acts = load_channel_act_file(remaining_args.act_channel) if hasattr(remaining_args, 'act_channel') else None
     enable_static = getattr(remaining_args, 'enable_static', False)
+    reft = True if training_args.peft == "reft" else False  
     
     if not training_args.eval_only:
-        from spft.utils.model import create_model_and_tokenizer
+        from spft.utils.model import create_model_and_tokenizer, print_trainable_parameters
         print("Launching Model: ", model_args.model_name_or_path)
         
         #* Create model + LoRA
         model, tokenizer = create_model_and_tokenizer(model_args, data_args, training_args)
         spft_config.padding_side = tokenizer.padding_side
+        spft_config.BOS_ID = tokenizer.bos_token_id
+        spft_config.reft_prefix = training_args.reft_prefix
+        spft_config.reft_suffix = training_args.reft_suffix
         
         callbacks = []
-        model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
-                               enable_static=enable_static, 
+        model = get_spft_model(model, spft_config, training_args=training_args, channel_acts=channel_acts, 
+                               enable_static=enable_static, reft=reft,
                                enable_unsloth=training_args.enable_unsloth)
         callbacks.append(get_spft_callback(spft_config))
         model = model.to(torch.bfloat16)
         
-        model.print_trainable_parameters()
+        # model.print_trainable_parameters()
+        print_trainable_parameters(model)
         # Load dataset
         
         print(f"[INFO] Loading dataset: {data_args.dataset}, max_length: {data_args.model_max_length}, max_seq_length: {data_args.max_seq_length}, batch_size: {training_args.per_device_train_batch_size}")
@@ -78,7 +84,7 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
             tokenizer,
             pad_to_multiple_of=data_args.max_seq_length,
             return_tensors="pt",
-            padding=True,
+            padding=True
         )
         
         print("Training save strategy: ", training_args.save_strategy)
@@ -90,8 +96,10 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
             eval_dataset=data_dict["eval"],
             data_collator=collator,
             callbacks=callbacks,
-        )    
-        
+        )
+
+        trainer.save_model(output_dir=training_args.output_dir)
+       
         trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
 
         channel_acts = get_channel_act(model, spft_config)
@@ -199,7 +207,7 @@ if __name__ == "__main__":
     
     set_seed(training_args.seed)
 
-    remaining_args = parse_args(remaining_args) if remaining_args else remaining_args
+    # remaining_args = parse_args(remaining_args) if remaining_args else remaining_args
     
     main(model_args, data_args, training_args, remaining_args, cli_spft_keys)
 

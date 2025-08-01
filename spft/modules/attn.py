@@ -6,7 +6,7 @@ from transformers.cache_utils import Cache, StaticCache
 
 from transformers.modeling_flash_attention_utils import _flash_attention_forward
 
-from .base import SparseModule
+from .base import SparseModule, reft_forward
 from liger_kernel.transformers import liger_rotary_pos_emb 
 
 __all__ = ["SparseLlamaFlashAttention"]
@@ -52,6 +52,29 @@ class SparseLlamaFlashAttention(SparseModule):
                                            for key, value in channel_act.items()}
         self.per_channel = not cfg.qk_per_head
 
+        self.reft = kwargs.get("reft", False)
+        if self.reft:
+            rank = kwargs.get("rank", 8)
+            self.prefix = kwargs.get("prefix")
+            self.suffix = kwargs.get("suffix")
+            self.reft_lora = nn.ModuleDict({
+                "q": nn.Sequential(
+                    nn.Linear(base.q_proj.out_features, rank, bias=True),
+                    nn.Dropout(p=0.1),
+                    nn.Linear(rank, base.q_proj.out_features, bias=False)
+                ),
+                "k": nn.Sequential(
+                    nn.Linear(base.k_proj.out_features, rank, bias=True),
+                    nn.Dropout(p=0.1),
+                    nn.Linear(rank, base.k_proj.out_features, bias=False)
+                ),
+                "v": nn.Sequential(
+                    nn.Linear(base.v_proj.out_features, rank, bias=True),
+                    nn.Dropout(p=0.1),
+                    nn.Linear(rank, base.v_proj.out_features, bias=False)
+                )
+            })
+
     def kernel_proj_o_forward(self, x, masks, vo_indices):
         
         if masks is None: # or self.layer_idx == 13: #* No Split
@@ -78,11 +101,6 @@ class SparseLlamaFlashAttention(SparseModule):
             sparse_x, dense_x = self.token_splits(x, masks)
             dense_q, dense_k, dense_v = self.q_proj(dense_x), self.k_proj(dense_x), self.v_proj(dense_x)
             sparse_q, sparse_k, sparse_v = self.q_proj(sparse_x, sparse_q_indices), self.k_proj(sparse_x, sparse_k_indices), self.v_proj(sparse_x, sparse_v_indices)
-            
-            #* Let's log the sparsity:
-            self.stats["sparsity/q"] = 1-self.q_proj.sparsity
-            self.stats["sparsity/k"] = 1-self.k_proj.sparsity
-            self.stats["sparsity/v"] = 1-self.v_proj.sparsity
             
             # #* Token Order: [Sparse | Dense] --> [In | Out]
             out_q = self.token_join(sparse=sparse_q, dense=dense_q, masks=masks)
@@ -321,7 +339,14 @@ class SparseLlamaFlashAttention(SparseModule):
             query_states = self.q_proj(hidden_states)
             key_states = self.k_proj(hidden_states)
             value_states = self.v_proj(hidden_states)
-            
+
+
+        _, _, begin_s, end_s = masks
+
+        if q_len > 1:
+            query_states = reft_forward(query_states, begin_s, end_s, self.reft_lora['q'])
+            key_states = reft_forward(key_states, begin_s, end_s, self.reft_lora['k'])
+            value_states = reft_forward(value_states, begin_s, end_s, self.reft_lora['v'])
             
         # Flash attention requires the input to have the shape
         # batch_size x seq_length x head_dim x hidden_dim
