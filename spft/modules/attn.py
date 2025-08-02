@@ -75,6 +75,13 @@ class SparseLlamaFlashAttention(SparseModule):
                 )
             })
 
+            # zero initialization
+            for key in ["q", "k", "v"]:
+                linear_layer = self.reft_lora[key][0]
+                nn.init.kaiming_normal_(linear_layer.weight)
+                linear_layer = self.reft_lora[key][2]
+                nn.init.kaiming_normal_(linear_layer.weight)
+
     def kernel_proj_o_forward(self, x, masks, vo_indices):
         
         if masks is None: # or self.layer_idx == 13: #* No Split

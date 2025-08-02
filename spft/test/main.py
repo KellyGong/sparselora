@@ -100,9 +100,9 @@ def main(args):
 
     spft_config.padding_side = tokenizer.padding_side
 
-    # model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
-    #                        enable_static=args.enable_static, 
-    #                        enable_unsloth=False)
+    model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
+                           enable_static=args.enable_static, 
+                           enable_unsloth=False)
 
     if len(tokenizer) > 32000: #* Llama3
         print("Using LLaMA 3 tokenizer")

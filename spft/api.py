@@ -186,7 +186,7 @@ def _patch_spft_generate(model: nn.Module, config: SPFTConfig) -> None:
     
 
 
-def get_spft_model(model: nn.Module, config: SPFTConfig, training_args, **kwargs: Dict[str, str]) -> nn.Module:
+def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str]) -> nn.Module:
     #* Patching the forward method of lora module
     from .modules import get_module_mapping, lora_forward, lora4bit_forward
     peft.tuners.lora.Linear4bit.forward = lora4bit_forward
@@ -222,7 +222,7 @@ def get_spft_model(model: nn.Module, config: SPFTConfig, training_args, **kwargs
         for name, module in model.named_modules():
             l_name, sparsity = next(((suffix, val) for suffix, val in config.sparsity.items() if name.endswith(suffix)), (None, None))
             if sparsity is not None:
-                kwargs_module = {"name": l_name, "idx":int(l_name.split(".")[1]), "sparsity": sparsity, "cfg": config, "enable_static": _enable_static, "reft": reft, "rank": training_args.lora_r, "prefix": training_args.reft_prefix, "suffix": training_args.reft_suffix}
+                kwargs_module = {"name": l_name, "idx":int(l_name.split(".")[1]), "sparsity": sparsity, "cfg": config, "enable_static": _enable_static, "reft": reft, "rank": config.rank}
                 if sparsity > 0 and channel_acts is not None and name in channel_acts:
                     kwargs_module["channel_act"] = channel_acts[name]
                 if type(module) in MODEL_MAPPING:

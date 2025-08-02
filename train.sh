@@ -13,7 +13,7 @@ CUDA_VISIBLE_DEVICES=1 python spft/train/main.py \
 CUDA_VISIBLE_DEVICES=0 python spft/train/main.py \
     --report_to none \
     --logging_strategy no \
-    --output_dir checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/math/include_linear_lora \
+    --output_dir checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/math/ \
     --seed 41 \
     --model_name_or_path NousResearch/Meta-Llama-3-8B-Instruct \
     --spft configs/sparsity/llama3-8b-math10k.yaml \
@@ -22,7 +22,7 @@ CUDA_VISIBLE_DEVICES=0 python spft/train/main.py \
     --config configs/train/math10k_train.yaml \
     --do_eval True
 
-CUDA_VISIBLE_DEVICES=1 python spft/train/main.py \
+CUDA_VISIBLE_DEVICES=0 python spft/train/main.py \
     --report_to none \
     --logging_strategy no \
     --output_dir checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/math \
@@ -32,6 +32,7 @@ CUDA_VISIBLE_DEVICES=1 python spft/train/main.py \
     --benchmark True \
     --spft_start_step 0 \
     --config configs/train/math10k_train.yaml \
+    --do_eval True \
     --enable_static True \
-    --act_channel configs/act_freq/math_10k.json \
-    --do_eval True
+    --act_channel configs/act_freq/math_10k.json
+    
