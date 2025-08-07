@@ -102,8 +102,8 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
             elif config.skip_sink_tokens:
                 masks[..., : config.skip_sink_tokens] = True
             
-            
-            elif config.skip_output_tokens: 
+            else:
+            # elif config.skip_output_tokens: 
                 #* Left Bounds
                 is_ctx = (labels == -100)  # shape (B, S)
                 
@@ -144,8 +144,15 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
                     #* No dense output tokens & left-padding:
                     masks = (masks, min_left, indice_gen(bos_indices, config.reft_prefix, True), indice_gen(left_lengths, config.reft_suffix, False)) #* For easy slicing.
                 
-            if not (config.skip_sink_tokens or config.skip_output_tokens or config.skip_random_tokens):
-                masks = None
+            # if not (config.skip_sink_tokens or config.skip_output_tokens or config.skip_random_tokens):
+            #     masks = None
+
+        else:
+            bos_indices = (input_ids == config.BOS_ID).nonzero(as_tuple=True)[1]
+
+            end_indices = torch.tensor([input_ids.shape[1] for _ in range(input_ids.shape[0])]).to(bos_indices.device)
+
+            masks = (None, None, indice_gen(bos_indices, config.reft_prefix, True), indice_gen(end_indices, config.reft_suffix, False))
 
         for module in self.model.modules():
             if isinstance(module, SparseModule):
@@ -171,8 +178,13 @@ def _patch_spft_generate(model: nn.Module, config: SPFTConfig) -> None:
         self,
         *args, **kwargs
     ):  
-        masks = None
+        # masks = None
         
+        bos_indices = (args[0] == config.BOS_ID).nonzero(as_tuple=True)[1]
+
+        end_indices = torch.tensor([args[0].shape[1] for _ in range(args[0].shape[0])]).to(bos_indices.device)
+
+        masks = (None, None, indice_gen(bos_indices, config.reft_prefix, True), indice_gen(end_indices, config.reft_suffix, False))
 
         for module in self.model.modules():
             if isinstance(module, SparseModule):
@@ -183,7 +195,6 @@ def _patch_spft_generate(model: nn.Module, config: SPFTConfig) -> None:
         )
 
     model.generate = types.MethodType(_patched_generate, model)
-    
 
 
 def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str]) -> nn.Module:

@@ -8,7 +8,9 @@ warmup_ratio: 0.04
 eval_strategy: "no"
 save_strategy: "no"
 logging_steps: 1
-peft: "lora"
+logging_strategy: "steps"
+peft: "reft"
 bf16: true
 lora_dropout: 0.0
 ddp_find_unused_parameters: false
+max_grad_norm: 2.0

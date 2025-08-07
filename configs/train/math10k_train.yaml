@@ -2,16 +2,16 @@ dataset: "datasets/math_10k.json"
 eval_dataset: "gsm8k+svamp+mawps"
 per_device_train_batch_size: 16
 num_train_epochs: 3
-learning_rate: 3e-5
+learning_rate: 3e-4
 lr_scheduler_type: cosine
 warmup_ratio: 0.04
 eval_strategy: "no"
 save_strategy: "no"
-logging_steps: 10
+logging_steps: 1
 logging_strategy: "steps"
 peft: "reft"
 bf16: true
 lora_dropout: 0.0
 ddp_find_unused_parameters: false
-max_grad_norm: 3.0
-gradient_accumulation_steps: 4
+max_grad_norm: 2.0
+# gradient_accumulation_steps: 2

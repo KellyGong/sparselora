@@ -11,7 +11,19 @@ from collections import defaultdict
 
 from spft.utils import distributed as dist
 from spft.api import SPFTConfig, load_channel_act_file, get_spft_model
-from transformers import AutoTokenizer, GenerationConfig
+from transformers import AutoTokenizer, GenerationConfig, AutoModelForCausalLM, AutoModel
+
+
+def safe_load(model_dir):
+    from safetensors import torch as safetorch
+
+    state_dict = {}
+    for file in os.listdir(model_dir):
+        if file.endswith(".safetensors"):
+            file_path = os.path.join(model_dir, file)
+            state_dict.update(safetorch.load_file(file_path))
+
+    return state_dict
 
 
 def generate_prompt(instruction):
@@ -75,16 +87,26 @@ def main(args):
     spft_config = SPFTConfig.from_file(os.path.join(args.model_name_or_path, 'args.json'))
     channel_acts = load_channel_act_file(args.act_channel) if args.act_channel else None
 
-    model = AutoPeftModelForCausalLM.from_pretrained(
-    args.model_name_or_path,
-    attn_implementation="flash_attention_2",
-    torch_dtype=torch.bfloat16,
-    # device_map="auto",
-    # max_memory=max_memory,
-    ).to('cuda')
+    if spft_config.peft != 'reft':
+        model = AutoPeftModelForCausalLM.from_pretrained(
+        args.model_name_or_path,
+        attn_implementation="flash_attention_2",
+        torch_dtype=torch.bfloat16,
+        # device_map="auto",
+        # max_memory=max_memory,
+        ).to('cuda')
+    
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            spft_config.model_id,
+            attn_implementation="flash_attention_2",
+            torch_dtype=torch.bfloat16,
+        ).to('cuda')
+
+    tokenizer_path = model.peft_config["default"].base_model_name_or_path if spft_config.peft != 'reft' else spft_config.model_id
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model.peft_config["default"].base_model_name_or_path,
+        tokenizer_path,
         model_max_length=512,
         padding_side="left",
         use_fast=False,
@@ -101,8 +123,16 @@ def main(args):
     spft_config.padding_side = tokenizer.padding_side
 
     model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
-                           enable_static=args.enable_static, 
-                           enable_unsloth=False)
+                           enable_static=args.enable_static, reft=spft_config.peft,
+                           enable_unsloth=False).to('cuda')
+    
+    state_dict = safe_load(args.model_name_or_path)
+
+    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+    model = model.to(torch.bfloat16)
+
+    print(f"Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
 
     if len(tokenizer) > 32000: #* Llama3
         print("Using LLaMA 3 tokenizer")
@@ -118,7 +148,8 @@ def main(args):
     metrics = {}
     results = defaultdict(list)
     for dataset in args.dataset.split("+") if "+" in args.dataset else [args.dataset]:
-        with open(os.path.join("datasets", dataset, "test.json")) as fd:
+        eval_path = os.path.join("datasets", dataset, "test.json")
+        with open(eval_path) as fd:
             instances = json.load(fd)
         instances = instances[dist.rank() :: dist.size()]
 
