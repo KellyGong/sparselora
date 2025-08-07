@@ -14,12 +14,11 @@ class SparseLinear(nn.Linear):
         self.mode = mode
         self.sparse_lora_branch = config.sparse_lora_branch
     
+    # sparse_indices: Optional[torch.Tensor] = None,
     def forward(self, x: torch.Tensor, sparse_indices: Optional[torch.Tensor] = None, **kwargs: Any) -> torch.Tensor:
         x = x.contiguous()
         if sparse_indices is None or self.mode is None: #dense
             return F.linear(x, self.weight)
-        
-        
         
         if self.mode == "in_gather":
             sparse_indices_exp = sparse_indices.unsqueeze(0).unsqueeze(0).expand(x.shape[0],x.shape[1], -1)
@@ -46,11 +45,6 @@ def lora_forward(self, x: torch.Tensor, indices: Optional[torch.Tensor] = None, 
     
     result = self.base_layer(x, indices)
     
-    if indices is not None and not self.base_layer.sparse_lora_branch:
-        #* Scattered back!
-        self.sparsity =  torch.count_nonzero(result) / result.numel()
-        
-    
     torch_result_dtype = result.dtype
     for active_adapter in self.active_adapters:
         if active_adapter not in self.lora_A.keys():
@@ -62,13 +56,14 @@ def lora_forward(self, x: torch.Tensor, indices: Optional[torch.Tensor] = None, 
         x = x.to(lora_A.weight.dtype)
 
         if not self.use_dora[active_adapter]: #* Implement Changes Here (pass *args/**kwargs)
-            x = lora_A(x, indices, *args, **kwargs)
-            x = lora_B(x, indices, *args, **kwargs)
+            # x = lora_A(x, indices, *args, **kwargs)
+            # x = lora_B(x, indices, *args, **kwargs)
+           
+            x = lora_A(x, indices)
+            x = lora_B(x, indices)
             result = torch.add(result, x, alpha=scaling)
-            
+                        
             if indices is not None and self.base_layer.sparse_lora_branch:
-                #* Scattered back!
-                self.sparsity =  torch.count_nonzero(result) / result.numel()
                 
                 if lora_B.mode == "out_scatter" : #* Support for Sparse LoRA Branch
                     out_shape = (x.shape[0], x.shape[1], self.base_layer.weight.shape[0])

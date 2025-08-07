@@ -68,7 +68,11 @@ def create_attn_svd_pred(base, rank: int, layer_name: str, cfg: Any):
     base_dir = f"{basepath}/{model_name}/r_{rank}/attn"
     os.makedirs(base_dir, exist_ok=True)
     base_path = f"{base_dir}/{layer_name}"
-    device, dtype = base.q_proj.base_layer.weight.device, base.q_proj.base_layer.weight.dtype
+
+    if hasattr(base.q_proj, "base_layer"):
+        device, dtype = base.q_proj.base_layer.weight.device, base.q_proj.base_layer.weight.dtype
+    else:
+        device, dtype = base.q_proj.weight.device, base.q_proj.weight.dtype
 
     try:
         q = [torch.load(base_path + f"_q_low_rank_{p}.pt", map_location=device, weights_only=True).to(dtype) for p in ("a", "b")]

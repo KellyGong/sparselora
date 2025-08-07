@@ -1,6 +1,8 @@
 from spft.train.args import DataTrainingArguments, ModelArguments, TrainingArguments
 from peft import LoraConfig, get_peft_model
 import torch
+import pyreft
+from tqdm import tqdm
 from liger_kernel.transformers import apply_liger_kernel_to_llama
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from .io import rank0_print
@@ -74,6 +76,7 @@ def create_model_and_tokenizer(model_args: ModelArguments, data_args: DataTraini
                 bias="none",
                 task_type="CAUSAL_LM",
             )
+            model = get_peft_model(model, config)
         elif training_args.peft == "dora":
             config = LoraConfig(
                 r=training_args.lora_r,
@@ -84,11 +87,44 @@ def create_model_and_tokenizer(model_args: ModelArguments, data_args: DataTraini
                 task_type="CAUSAL_LM",
                 use_dora=True,
             )
+            model = get_peft_model(model, config)
+        elif training_args.peft == "reft":
+            pass
         else:
             raise ValueError(f"Unsupported PEFT method: '{training_args.peft}'")
-        model = get_peft_model(model, config)
-        
+
     return model, tokenizer
+
+
+def print_trainable_parameters(model):
+    total_trainable_params = 0
+    total_params = 0
+    
+    print(f"{'Module':<40} | {'Submodule':<50} | {'Trainable Parameters':<20}")
+    print("-" * 120)
+
+    for module_name, module in model.named_modules():
+        if module_name == '':
+            continue
+
+        parent_module_name = '.'.join(module_name.split('.')[:-1]) if '.' in module_name else 'Top-level'
+
+        submodule_trainable_params = 0
+        for param in module.parameters(recurse=False):
+            if param.requires_grad:
+                submodule_trainable_params += param.numel()
+            total_params += param.numel()
+
+        if submodule_trainable_params > 0:
+            print(f"{parent_module_name:<40} | {module_name:<50} | {submodule_trainable_params:<20}")
+
+        total_trainable_params += submodule_trainable_params
+
+    print("-" * 120)
+    print(f"Total trainable parameters: {total_trainable_params}")
+    print(f"Total parameters: {total_params}")
+    print(f"Trainable parameters percentage: {total_trainable_params / total_params * 100:.2f}%")
+    print("-" * 120)
 
 
 def unsloth_initialize(model_args: ModelArguments, data_args: DataTrainingArguments, training_args: TrainingArguments):

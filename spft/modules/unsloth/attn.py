@@ -304,9 +304,9 @@ class UnslothSparseLlamaAttention(SparseModule):
             sparse_q, sparse_k, sparse_v = self.q_proj(sparse_x, sparse_q_indices), self.k_proj(sparse_x, sparse_k_indices), self.v_proj(sparse_x, sparse_v_indices) 
 
             #* Let's log the sparsity:
-            self.stats["sparsity/q"] = 1-self.q_proj.sparsity
-            self.stats["sparsity/k"] = 1-self.k_proj.sparsity
-            self.stats["sparsity/v"] = 1-self.v_proj.sparsity
+            # self.stats["sparsity/q"] = 1-self.q_proj.sparsity
+            # self.stats["sparsity/k"] = 1-self.k_proj.sparsity
+            # self.stats["sparsity/v"] = 1-self.v_proj.sparsity
             
             # #* Token Order: [Sparse | Dense] --> [In | Out]
             out_q = self.token_join(sparse=sparse_q, dense=dense_q, masks=masks)

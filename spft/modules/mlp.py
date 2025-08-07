@@ -19,25 +19,51 @@ class SparseLlamaMLP(SparseModule):
         "act_fn",
     ]
 
-    def __init__(self, base: nn.Module, *, name: str, idx: int, sparsity: float, cfg) -> None:
+    def __init__(self, base: nn.Module, *, name: str, idx: int, sparsity: float, cfg, **kwargs) -> None:
         super().__init__(base)
         self.sparsity = sparsity
         self.layer_name = name
         self.layer_idx = idx
         if self.sparsity > 0:
             self.load_predictor(base,cfg)
-    
-    def kernel_forward(self, x: torch.Tensor, masks: Optional[torch.Tensor] = None, sparse_indices = None) -> torch.Tensor:
-        
-        if masks is None:  #* No Split #* No Split
+            self.enable_static = kwargs.get("enable_static", False)
+            if self.enable_static:
+                channel_act = kwargs.get("channel_act", None)
+                if channel_act is None:
+                    self.channel_act = torch.zeros(base.up_proj.out_features)
+                else:
+                    self.channel_act = channel_act
+                    # sorted the channel_act values and get the top-k indices with largest values
+                    _, self.static_indices = torch.topk(torch.tensor(self.channel_act), int(base.up_proj.out_features * (1 - self.sparsity)), sorted=False)
+                    self.static_indices = self.static_indices.to('cuda')
+            
+            self.dense_stream, self.sparse_stream = torch.cuda.Stream(), torch.cuda.Stream() 
+
+    def kernel_forward(self, x: torch.Tensor, masks: Optional[torch.Tensor] = None, static_indices = None) -> torch.Tensor:
+
+        if masks is None:  # No Split
+            dynamic_indices = self.pred_mlp(x)
+            sparse_indices = dynamic_indices
+            if static_indices is not None:
+                sparse_indices = torch.unique(torch.cat((dynamic_indices, static_indices), dim=0))
             return self._forward_block(x, sparse_indices=sparse_indices)
         
         else: #* Split
             sparse_x, dense_x = self.token_splits(x, masks)
-            sparse_mlp_indices = sparse_indices
 
-            dense_x = self._forward_block(dense_x)
-            sparse_x = self._forward_block(sparse_x, sparse_indices=sparse_mlp_indices)
+            with torch.cuda.stream(self.sparse_stream):
+                dynamic_indices = self.pred_mlp(x)
+                if static_indices is not None:
+                    sparse_indices = torch.unique(torch.cat((dynamic_indices, static_indices), dim=0))
+                else:
+                    sparse_indices = dynamic_indices
+                sparse_x = self._forward_block(sparse_x, sparse_indices=sparse_indices)
+            
+            with torch.cuda.stream(self.dense_stream):
+                dense_x = self._forward_block(dense_x)
+            
+            # torch.cuda.synchronize()
+            
             #* Token Order: [Sparse | Dense] --> [In | Out]
             out = self.token_join(sparse=sparse_x, dense=dense_x, masks=masks)
             return out
@@ -114,12 +140,22 @@ class SparseLlamaMLP(SparseModule):
     
     def forward(self, x: torch.Tensor, masks: Optional[torch.Tensor] = None) -> torch.Tensor:      
         
-        if self.enabled and self.sparsity > 0:
+        if self.enabled and self.sparsity > 0 and x.shape[1] > 1: #* Prefill Phase
             
             if self.mode == "svd":
+
+                if not hasattr(self, "static_indices"):
+                    x = self.kernel_forward(x, masks)
+
+                    if self.enable_static:
+                        # aggregate static channel activations based on some examples
+                        one_channel_act = torch.zeros_like(self.channel_act)
+                        one_channel_act[indices.to('cpu')] = 1.0
+                        self.channel_act += one_channel_act
                 
-                indices = self.pred_mlp(x)
-                x = self.kernel_forward(x, masks, indices)
+                else:
+                    # calculate the static channel activations and combine with the dynamic channel activations (use set difference)
+                    x = self.kernel_forward(x, masks, static_indices=self.static_indices)
                 
                 
             elif "oracle" in self.mode: 

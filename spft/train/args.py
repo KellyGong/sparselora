@@ -8,7 +8,7 @@ import transformers
 class TrainingArguments(transformers.TrainingArguments):
     peft: Optional[str] = field(default="lora")
     benchmark: bool = field(default=False)
-    lora_r: int = field(default=32)
+    lora_r: int = field(default=4)  # default 32
     lora_alpha: int = field(default=64)
     lora_dropout: Optional[float] = field(default=0) #0.05)
     lora_target_modules: Optional[str] = field(default="q_proj,k_proj,v_proj,o_proj")
@@ -26,7 +26,9 @@ class TrainingArguments(transformers.TrainingArguments):
     spft_qkvo_seq_avg: bool = field(default=False)
     spft_mlp_seq_avg: bool = field(default=True)
     spft_sparse_output_tokens: float = field(default=0)
-    
+
+    reft_prefix: int = field(default=7)    
+    reft_suffix: int = field(default=7)
     
     eval_only: bool = field(default=False)
     #* Store action true

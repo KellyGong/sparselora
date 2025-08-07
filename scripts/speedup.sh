@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 
-source scripts/setup/setup.sh
+# source scripts/setup/setup.sh
 
-#* If dataset folder is not present, download it
-if [ ! -d "datasets" ]; then
-    bash scripts/setup/data.sh
-fi
+# #* If dataset folder is not present, download it
+# if [ ! -d "datasets" ]; then
+#     bash scripts/setup/data.sh
+# fi
 
 
 MODEL=${1:-"NousResearch/Meta-Llama-3-8B-Instruct"}
-SPARSITY_CONFIG=${2:-llama3-8b-math10k.yaml}
+# SPARSITY_CONFIG=${2:-llama3-8b-math10k.yaml}
+SPARSITY_CONFIG=${2:-llama3-8b-dense.yaml}
 DATASET=${3:-"math10k"}
 
 #* Check SVD Estimator:
-bash scripts/setup/svd_estimator.sh $MODEL configs/sparsity/$SPARSITY_CONFIG
+# bash scripts/setup/svd_estimator.sh $MODEL configs/sparsity/$SPARSITY_CONFIG
+
+# bash scripts/setup/svd_estimator.sh "NousResearch/Meta-Llama-3-8B-Instruct" configs/sparsity/llama3-8b-math10k.yaml
+
 
 # Shift first 2 arguments so $@ contains only extras
 shift 2
@@ -62,7 +66,6 @@ for i in $(seq 1 $N); do
             --seed "$SEED" \
             --model_name_or_path "$MODEL" \
             --spft "configs/sparsity/$SPARSITY_CONFIG" \
-            --spft_benchmark True \
             --benchmark True \
             --spft_start_step 0 \
             --config "$DATA_CONFIG_FILE" \

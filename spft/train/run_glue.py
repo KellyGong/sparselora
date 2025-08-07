@@ -95,7 +95,6 @@ class TrainingArguments(transformers.TrainingArguments):
     spft_dense_to_sparse_ratio: float = field(default=0)
     spft_mlp_seq_avg: bool = field(default=True)
     spft_min_sparse_length: int = field(default=0)
-    spft_benchmark: bool = field(default=False)
     eval_only: bool = field(default=False)
     
     #* GLUE Specific

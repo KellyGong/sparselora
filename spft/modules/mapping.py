@@ -5,7 +5,7 @@ from .linear import SparseLinear
 from .linear4bit import SparseLinear4bit
 from transformers.models.llama.modeling_llama import LlamaMLP
 
-__all__ = ["get_module_mapping", "SPARSITY_MAPPING"]
+__all__ = ["get_module_mapping", "SPARSITY_MAPPING", "SPARSITY_MAPPING_REFT"]
 
 
 
@@ -79,4 +79,24 @@ SPARSITY_MAPPING = {
     "down_proj": "in",
     "down_proj.base_layer": "in_gather",
     "down_proj.lora_A.default": "in_gather",
+}
+
+SPARSITY_MAPPING_REFT = {
+    
+    "q_proj": "out_scatter",
+    
+    "k_proj": "out_scatter",
+    
+    "v_proj": "out_scatter",
+    
+    "o_proj": "in_gather",
+
+    # in_gather
+    
+    "gate_proj": "out",
+       
+    "up_proj": "out",
+    
+    "down_proj": "in",
+
 }
