@@ -120,15 +120,17 @@ def main(args):
     if tokenizer.pad_token is None:
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
-    spft_config.padding_side = tokenizer.padding_side
+    if spft_config.peft == 'reft':
 
-    model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
-                           enable_static=args.enable_static, reft=spft_config.peft,
-                           enable_unsloth=False).to('cuda')
+        spft_config.padding_side = tokenizer.padding_side
     
-    state_dict = safe_load(args.model_name_or_path)
+        model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
+                               enable_static=args.enable_static, reft=spft_config.peft,
+                               enable_unsloth=False).to('cuda')
+    
+        state_dict = torch.load(os.path.join(args.model_name_or_path, "reft.pth"), map_location="cuda", weights_only=True)
 
-    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
 
     model = model.to(torch.bfloat16)
 

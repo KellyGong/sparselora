@@ -7,7 +7,12 @@ import math
 import torch
 import torch.distributed as dist
 
+from spft.api import SPFTConfig, get_spft_model
+
 from datasets import Dataset
+from torch.utils.data import DataLoader
+from transformers import default_data_collator, AutoTokenizer, AutoModelForCausalLM
+from peft import AutoPeftModelForCausalLM
 
 
 ALPACA_PREFIX_TEMPLATE_MD = """Below is an instruction that describes a task.\n Write a response that appropriately completes the request.
@@ -68,7 +73,7 @@ def post_process(text):
         new_lines.append("    " * indentation_level[space] + line.lstrip())
     return "\n".join(new_lines)
 
-def split_dataset(dataset, rank, world_size):
+def split_dataset(dataset, rank=0, world_size=1):
     total_size = len(dataset)
     per_process_size = math.ceil(total_size / world_size)
     start_index = rank * per_process_size
@@ -83,39 +88,61 @@ def main() -> None:
     parser.add_argument("--model_name_or_path", type=str, required=True)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--max_new_tokens", type=int, default=512)
-    parser.add_argument("--base_model_name_or_path", type=str)
+    # parser.add_argument("--base_model_name_or_path", type=str)
     
     args = parser.parse_args()
+
+    spft_config = SPFTConfig.from_file(os.path.join(args.model_name_or_path, "args.json"))
     
     seed = 42
     
     method = "base-lora"
     
-    local_rank = int(os.getenv("LOCAL_RANK", "0"))
-    torch.cuda.set_device(local_rank)
-    world_size = int(os.getenv("WORLD_SIZE", "1"))
-    dist.init_process_group(backend='nccl', rank=local_rank, world_size=world_size)
-
+    # local_rank = int(os.getenv("LOCAL_RANK", "0"))
+    # torch.cuda.set_device(local_rank)
+    # world_size = int(os.getenv("WORLD_SIZE", "1"))
+    # dist.init_process_group(backend='nccl', rank=local_rank, world_size=world_size)
     
-    # Step 1: load model
-    from torch.utils.data import DataLoader
-    from transformers import default_data_collator, AutoTokenizer, AutoModelForCausalLM
-    from peft import AutoPeftModelForCausalLM
+    if spft_config.peft != 'reft':
+        model = AutoPeftModelForCausalLM.from_pretrained(
+        args.model_name_or_path,
+        attn_implementation="flash_attention_2",
+        torch_dtype=torch.float16,
+        # device_map="auto",
+        ).to('cuda')
     
-    model = AutoPeftModelForCausalLM.from_pretrained(
-    args.model_name_or_path,
-    attn_implementation="flash_attention_2",
-    torch_dtype=torch.float16,
-    device_map="auto",
-    )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            spft_config.model_id,
+            attn_implementation="flash_attention_2",
+            torch_dtype=torch.float16,
+        ).to('cuda')
+    
+    tokenizer_path = model.peft_config["default"].base_model_name_or_path if spft_config.peft != 'reft' else spft_config.model_id
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model.peft_config["default"].base_model_name_or_path,
+        tokenizer_path,
         model_max_length=512,
         padding_side="left",
         use_fast=False,
     )
+
+    if spft_config.peft == 'reft':
+
+        spft_config.padding_side = tokenizer.padding_side
     
+        model = get_spft_model(model, spft_config, 
+                               reft=spft_config.peft,
+                               enable_unsloth=False).to('cuda')
+    
+        state_dict = torch.load(os.path.join(args.model_name_or_path, "reft.pth"), map_location="cuda", weights_only=True)
+
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+    
+    model = model.to(torch.bfloat16)
+
+    print(f"Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
+
     if len(tokenizer) > 32000: #* Llama3
         print("Using LLaMA 3 tokenizer")
         tokenizer.pad_token = "<|reserved_special_token_0|>"
@@ -134,7 +161,7 @@ def main() -> None:
     dataset = read_problems()
     dataset = [v for (k, v) in dataset.items()]
     
-    dataset = split_dataset(dataset, local_rank, world_size)
+    dataset = split_dataset(dataset)
     dataset = Dataset.from_list(dataset)
     
     def preprocess(examples):
@@ -168,7 +195,8 @@ def main() -> None:
     model.eval()
     with torch.no_grad():
         for _ in range(num_samples_per_task):
-            t = tqdm(dataloader, desc="Running Code Generation...") if dist.get_rank() == 0 else dataloader
+            t = tqdm(dataloader, desc="Running Code Generation...")
+            # if dist.get_rank() == 0 else dataloader
             for batch in t:
                 outputs = model.generate(
                     batch["input_ids"].to(model.device),
@@ -194,15 +222,15 @@ def main() -> None:
                 all_predictions.extend(batch_result)
             
 
-    all_predictions = gather_from_all_processes(all_predictions)
+    # all_predictions = gather_from_all_processes(all_predictions)
     print("predictions", all_predictions[:5])
-    if dist.get_rank() == 0:
-        print(f"Size of predictions: {len(all_predictions)}")
-        target_name = args.model_name_or_path + "generated_completions.jsonl" 
-        write_jsonl(target_name, all_predictions)
-        print(f"Generated samples saved to {target_name}")
+    # if dist.get_rank() == 0:
+    print(f"Size of predictions: {len(all_predictions)}")
+    target_name = args.model_name_or_path + "generated_completions.jsonl" 
+    write_jsonl(target_name, all_predictions)
+    print(f"Generated samples saved to {target_name}")
         
-    dist.destroy_process_group()
+    # dist.destroy_process_group()
     
     
 def gather_from_all_processes(data):

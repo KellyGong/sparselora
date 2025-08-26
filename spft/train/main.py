@@ -27,6 +27,7 @@ import sys
 import subprocess
 from spft.utils.data import load_dataset_by_name
 from spft.utils.arg_parser import parse_args
+from spft.reft import get_reft_dict
 
 
 def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_args: TrainingArguments, remaining_args: argparse.Namespace, cli_keys: set) -> None:    # Set up SPFT
@@ -109,20 +110,22 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
         with open(os.path.join(training_args.output_dir, "channel_acts.json"), "w") as f:
             json.dump(channel_acts, f, indent=4)
 
-    if "wizardlm" in data_args.dataset.lower():
+    if "wizardlm" in data_args.dataset.lower() and not reft:
         #* Save the model
         print(f"[INFO] Saving fulll model for chat: {training_args.output_dir}")
         #* Must Save the full checkpoint model to avoid chat-specific issues
         model = model.merge_and_unload()
-        
-        trainer.save_model(output_dir=training_args.output_dir)
-        trainer.save_state()
 
         tokenizer.save_pretrained(training_args.output_dir)
     else:
         print(f"[INFO] Model saved to {training_args.output_dir}")
+
+    if reft:
+        reft_dict = get_reft_dict(model.state_dict()) if reft else {}
+        torch.save(reft_dict, os.path.join(training_args.output_dir, "reft.pth"))
+    else:
         trainer.save_model(output_dir=training_args.output_dir)
-        trainer.save_state()
+    trainer.save_state()
     
     if training_args.do_eval: 
         if "wizardlm" in data_args.dataset.lower():

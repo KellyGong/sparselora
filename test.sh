@@ -1,5 +1,5 @@
 CUDA_VISIBLE_DEVICES=0 python spft/test/main.py \
-    --model_name_or_path checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/math/reft/math_10k_b16_ep3.0_lr0.0003_peft-reft_dense/41 \
+    --model_name_or_path checkpoints/meta-llama/Llama-3.1-8B-Instruct/math/reft/math_10k_b16_ep3.0_lr0.0003_peft-reft_dense/41 \
     --spft configs/sparsity/llama3-8b-dense.yaml \
     --dataset gsm8k+svamp+mawps
 

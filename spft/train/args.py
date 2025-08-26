@@ -37,6 +37,17 @@ class TrainingArguments(transformers.TrainingArguments):
         metadata={"help": "Enable Unsloth mode."},
     )
 
+    # add multi-task adaption automatically
+    multi_task_adaption: bool = field(
+        default=False,
+        metadata={"help": "Enable multi-task adaption."},
+    )
+
+    tasks: Optional[str] = field(
+        default="None",
+        metadata={"help": "Tasks for multi-task adaption, separated by +."},
+    )
+
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(default=None)
