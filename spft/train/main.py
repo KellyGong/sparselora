@@ -58,10 +58,11 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
     spft_config.reft_prefix = training_args.reft_prefix
     spft_config.reft_suffix = training_args.reft_suffix
     spft_config.peft = training_args.peft
+    spft_config.reft_punc = training_args.reft_punc
     spft_config.write_out(training_args.output_dir)
     
     callbacks = []
-    model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
+    model = get_spft_model(model, tokenizer, spft_config, channel_acts=channel_acts, 
                             enable_static=enable_static, reft=reft,
                             enable_unsloth=training_args.enable_unsloth)
     callbacks.append(get_spft_callback(spft_config))

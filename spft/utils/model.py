@@ -50,6 +50,7 @@ def create_model_and_tokenizer(model_args: ModelArguments, data_args: DataTraini
         model_args.model_name_or_path,
         model_max_length=data_args.model_max_length,
         padding_side="left",
+        return_offsets_mapping=True,
         use_fast=False,
     )
     

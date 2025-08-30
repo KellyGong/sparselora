@@ -85,9 +85,8 @@ def main(args):
     # max_memory = {device: torch.cuda.get_device_properties(device).total_memory for device in devices}
 
     spft_config = SPFTConfig.from_file(os.path.join(args.model_name_or_path, 'args.json'))
-    channel_acts = load_channel_act_file(args.act_channel) if args.act_channel else None
 
-    if spft_config.peft != 'reft':
+    if spft_config and spft_config.peft != 'reft':
         model = AutoPeftModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         attn_implementation="flash_attention_2",
@@ -95,15 +94,23 @@ def main(args):
         # device_map="auto",
         # max_memory=max_memory,
         ).to('cuda')
-    
-    else:
+        tokenizer_path = model.peft_config["default"].base_model_name_or_path
+
+    elif spft_config:
         model = AutoModelForCausalLM.from_pretrained(
             spft_config.model_id,
             attn_implementation="flash_attention_2",
             torch_dtype=torch.bfloat16,
         ).to('cuda')
-
-    tokenizer_path = model.peft_config["default"].base_model_name_or_path if spft_config.peft != 'reft' else spft_config.model_id
+        tokenizer_path = spft_config.model_id
+    
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name_or_path,
+            # attn_implementation="flash_attention_2",
+            torch_dtype=torch.float16,
+        ).to('cuda')
+        tokenizer_path = args.model_name_or_path
 
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_path,
@@ -120,11 +127,12 @@ def main(args):
     if tokenizer.pad_token is None:
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
-    if spft_config.peft == 'reft':
+
+    if spft_config and spft_config.peft == 'reft':
 
         spft_config.padding_side = tokenizer.padding_side
     
-        model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
+        model = get_spft_model(model, tokenizer, spft_config, channel_acts=channel_acts, 
                                enable_static=args.enable_static, reft=spft_config.peft,
                                enable_unsloth=False).to('cuda')
     
@@ -132,16 +140,10 @@ def main(args):
 
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
 
+        print(f"Unexpected keys: {unexpected_keys}")
+
     model = model.to(torch.bfloat16)
 
-    print(f"Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
-
-    if len(tokenizer) > 32000: #* Llama3
-        print("Using LLaMA 3 tokenizer")
-        tokenizer.pad_token = "<|reserved_special_token_0|>"
-        tokenizer.pad_token_id = 128002
-
-    
     generation_config = GenerationConfig(
         max_new_tokens=args.max_new_tokens,
         pad_token_id=tokenizer.pad_token_id,
@@ -153,7 +155,7 @@ def main(args):
         eval_path = os.path.join("datasets", dataset, "test.json")
         with open(eval_path) as fd:
             instances = json.load(fd)
-        instances = instances[dist.rank() :: dist.size()]
+        # instances = instances[dist.rank() :: dist.size()]
 
         num_correct = 0
         num_samples = 0
@@ -171,8 +173,6 @@ def main(args):
             outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
             outputs = [output.split("### Response:")[1].strip() for output in outputs]
             outputs_ext = [extract_answer(output, dataset=dataset) for output in outputs]
-            
-            
             
             for input, output, output_ext, target in zip(inputs, outputs, outputs_ext, targets):
                 if dataset in ["gsm8k", "mawps", "svamp"]:

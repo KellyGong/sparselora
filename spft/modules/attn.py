@@ -348,12 +348,12 @@ class SparseLlamaFlashAttention(SparseModule):
             value_states = self.v_proj(hidden_states)
 
 
-        _, _, begin_s, end_s = masks
+        _, _, reft_index = masks
 
-        if q_len > 1:
-            query_states = reft_forward(query_states, begin_s, end_s, self.reft_lora['q'])
-            key_states = reft_forward(key_states, begin_s, end_s, self.reft_lora['k'])
-            value_states = reft_forward(value_states, begin_s, end_s, self.reft_lora['v'])
+        if q_len > 1 and self.reft:
+            query_states = reft_forward(query_states, reft_index, self.reft_lora['q'])
+            key_states = reft_forward(key_states, reft_index, self.reft_lora['k'])
+            value_states = reft_forward(value_states, reft_index, self.reft_lora['v'])
             
         # Flash attention requires the input to have the shape
         # batch_size x seq_length x head_dim x hidden_dim

@@ -94,31 +94,36 @@ def main() -> None:
 
     spft_config = SPFTConfig.from_file(os.path.join(args.model_name_or_path, "args.json"))
     
-    seed = 42
-    
-    method = "base-lora"
-    
     # local_rank = int(os.getenv("LOCAL_RANK", "0"))
     # torch.cuda.set_device(local_rank)
     # world_size = int(os.getenv("WORLD_SIZE", "1"))
     # dist.init_process_group(backend='nccl', rank=local_rank, world_size=world_size)
     
-    if spft_config.peft != 'reft':
+    if spft_config and spft_config.peft != 'reft':
         model = AutoPeftModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         attn_implementation="flash_attention_2",
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
         # device_map="auto",
+        # max_memory=max_memory,
         ).to('cuda')
-    
-    else:
+        tokenizer_path = model.peft_config["default"].base_model_name_or_path
+
+    elif spft_config:
         model = AutoModelForCausalLM.from_pretrained(
             spft_config.model_id,
             attn_implementation="flash_attention_2",
-            torch_dtype=torch.float16,
+            torch_dtype=torch.bfloat16,
         ).to('cuda')
+        tokenizer_path = spft_config.model_id
     
-    tokenizer_path = model.peft_config["default"].base_model_name_or_path if spft_config.peft != 'reft' else spft_config.model_id
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name_or_path,
+            attn_implementation="flash_attention_2",
+            torch_dtype=torch.bfloat16,
+        ).to('cuda')
+        tokenizer_path = args.model_name_or_path
 
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_path,
@@ -127,21 +132,21 @@ def main() -> None:
         use_fast=False,
     )
 
-    if spft_config.peft == 'reft':
+    if spft_config and spft_config.peft == 'reft':
 
         spft_config.padding_side = tokenizer.padding_side
     
-        model = get_spft_model(model, spft_config, 
+        model = get_spft_model(model, tokenizer, spft_config, 
                                reft=spft_config.peft,
                                enable_unsloth=False).to('cuda')
     
         state_dict = torch.load(os.path.join(args.model_name_or_path, "reft.pth"), map_location="cuda", weights_only=True)
 
         missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        print(f"Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
     
     model = model.to(torch.bfloat16)
-
-    print(f"Missing keys: {missing_keys}, Unexpected keys: {unexpected_keys}")
 
     if len(tokenizer) > 32000: #* Llama3
         print("Using LLaMA 3 tokenizer")
@@ -226,7 +231,14 @@ def main() -> None:
     print("predictions", all_predictions[:5])
     # if dist.get_rank() == 0:
     print(f"Size of predictions: {len(all_predictions)}")
-    target_name = args.model_name_or_path + "generated_completions.jsonl" 
+    if spft_config:
+        target_name = os.path.join(args.model_name_or_path, "generated_completions.jsonl") 
+    else:
+        target_dir = os.path.join('checkpoints', 'raw', args.model_name_or_path)
+        target_name = os.path.join(target_dir, "generated_completions.jsonl")
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir, exist_ok=True)
+
     write_jsonl(target_name, all_predictions)
     print(f"Generated samples saved to {target_name}")
         

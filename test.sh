@@ -1,5 +1,5 @@
 CUDA_VISIBLE_DEVICES=0 python spft/test/main.py \
-    --model_name_or_path checkpoints/meta-llama/Llama-3.1-8B-Instruct/math/reft/math_10k_b16_ep3.0_lr0.0003_peft-reft_dense/41 \
+    --model_name_or_path checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/math_punc/reft/math_10k_b16_ep3.0_lr0.0003_peft-reft_dense/42 \
     --spft configs/sparsity/llama3-8b-dense.yaml \
     --dataset gsm8k+svamp+mawps
 
@@ -14,3 +14,11 @@ CUDA_VISIBLE_DEVICES=1 python spft/test/main.py \
     --model_name_or_path checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/csr170k/reft/commonsense_170k_b16_ep1.0_lr0.0003_peft-reft_dense/41 \
     --spft configs/sparsity/llama3-8b-dense.yaml \
     --dataset social-iqa+hellaswag+winogrande+arc-easy+arc-challenge+openbookqa
+
+CUDA_VISIBLE_DEVICES=1 python spft/test/main.py \
+    --dataset gsm8k+svamp+mawps \
+    --model_name_or_path checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/math/dora/math_10k_b16_ep3.0_r4_lr0.0003_peft-dora_dense/41
+
+CUDA_VISIBLE_DEVICES=0 python spft/test/main.py \
+    --dataset gsm8k+svamp+mawps \
+    --model_name_or_path meta-llama/Llama-2-13b-hf

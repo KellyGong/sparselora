@@ -185,7 +185,7 @@ def build_runname(args: Any, data_args:Any, spft_config:Any) -> str:
     # {dataset}_b{per_device_train_batch_size}_ep{num_train_epochs}_lr{learning_rate}_{spft_setting}_{FFN-Sparsity}_{QKVO-Sparsity}_skip-{skip_mode}_start_{start_step}
     print(data_args.dataset)
     dataset_name = data_args.dataset.split("/")[-1].split(".")[0]
-    run_name = f"{dataset_name}_b{args.per_device_train_batch_size}_ep{args.num_train_epochs}_lr{args.learning_rate}_peft-{str(args.peft)}"
+    run_name = f"{dataset_name}_b{args.per_device_train_batch_size}_ep{args.num_train_epochs}_r{args.lora_r}_lr{args.learning_rate}_peft-{str(args.peft)}"
     
     #* Check SPFT Setting:
     run_name += f"_{spft_config.mode}"

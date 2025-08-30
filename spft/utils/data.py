@@ -9,6 +9,7 @@ import logging
 from datasets import load_dataset, DatasetDict, Dataset, concatenate_datasets
 from transformers import AutoTokenizer
 from tqdm import tqdm
+import transformers
 
 # Import from spft modules
 from spft.data import generate_and_tokenize_prompt_math10k, generate_and_tokenize_prompt_csr170k, generate_and_tokenize_arc_agi, tokenize_arc_agi

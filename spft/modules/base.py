@@ -1,9 +1,15 @@
 from typing import List
 import torch.nn as nn
 import torch
+import random
 from typing import Optional
 from .svd import create_mlp_svd_pred, create_attn_svd_pred
-__all__ = ["SparseModule", "reft_forward", "indice_gen"]
+from transformers import AutoTokenizer
+__all__ = ["SparseModule", "reft_forward", "indice_gen", "get_punc_index", "compose_reft_index"]
+
+
+PUNC = set([".", ",", "?", "!", ";", ":"])
+# PUNC = [".", ",", "?", "!", ";", ":", "\n", "\"", "'", "(", ")", "[", "]", "{", "}"]
 
 
 class SparseModule(nn.Module):
@@ -43,7 +49,7 @@ class SparseModule(nn.Module):
     def token_splits(self, x: torch.Tensor, masks: Optional[torch.Tensor] = None) -> torch.Tensor:
         #?@ Fix here!
         if isinstance(masks, tuple):
-            masks, id_split, _, _ = masks
+            masks, id_split, _ = masks
             sparse_x = x[:, :id_split, :]
             dense_x = x[:, id_split:, :]
         else:
@@ -66,6 +72,64 @@ class SparseModule(nn.Module):
         return res.contiguous()
 
 
+def get_punc_index(tokenizer: AutoTokenizer, input_ids: torch.Tensor, EOS: Optional[int] = None):
+    """Get the indices of punctuation tokens in the input text."""
+    # raw_inputs = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+    tokens = tokenizer.convert_ids_to_tokens(input_ids.cpu()[0])
+    punc_inds = []
+    for i, input_id in enumerate(input_ids.cpu()):
+        tokens = tokenizer.convert_ids_to_tokens(input_id)
+        punc_ind = []
+        for j in range(min(len(tokens), EOS[i]) if EOS is not None else len(tokens)):
+            if tokens[j].replace('Ġ', '') in PUNC:
+                punc_ind.append(j)
+        punc_inds.append(punc_ind)
+    return punc_inds
+
+
+def compose_reft_index(bos: torch.Tensor, eos:torch.Tensor, prefix_num: int, suffix_num: int, punc_ids: Optional[list[list]] = None) -> torch.Tensor:
+    """Compose the reft index from the beginning and end indices."""
+    
+    if punc_ids is None:
+        reft_index = torch.cat([indice_gen(bos, prefix_num, True),
+                                indice_gen(eos, suffix_num, False)], dim=-1)
+    
+    # Minimum suffix and prefix number is 2, the maximum depend on the punc ids
+
+    else:
+        device = bos.device
+        reft_index = []
+        all_num = prefix_num + suffix_num
+        bos, eos = bos.tolist(), eos.tolist()
+        for i in range(len(bos)):
+            bos_i, eos_i, punc_id = bos[i], eos[i], punc_ids[i]
+            reft_index_i = []
+            if len(punc_id) > all_num - 4:
+                random_punc = random.sample(punc_id, all_num - 4)
+            else:
+                random_punc = punc_id
+
+            bos_index, eos_index = [], []
+            while True:
+                if bos_i not in random_punc:
+                    bos_index.append(bos_i)
+                bos_i += 1
+                if len(bos_index) == (all_num - len(random_punc) + 1) // 2:
+                    break
+            
+            while True:
+                if eos_i not in random_punc:
+                    eos_index.append(eos_i)
+                eos_i -= 1
+                if len(eos_index) == all_num - len(random_punc) - len(bos_index):
+                    break
+
+            reft_index_i = bos_index + random_punc + eos_index
+            reft_index.append(reft_index_i)
+
+    return torch.tensor(reft_index).to(device)
+
+
 def indice_gen(begin_s: torch.Tensor, prefix: int, direction: bool = True) -> torch.Tensor:
     # begin_s include the first bos token position in each sequence
     offset = torch.arange(prefix, device=begin_s.device)
@@ -75,21 +139,17 @@ def indice_gen(begin_s: torch.Tensor, prefix: int, direction: bool = True) -> to
     
     return begin_s.unsqueeze(1) + offset
 
-def reft_forward(x: torch.Tensor, begin_s: torch.Tensor, end_s: torch.Tensor, reft_model: nn.Sequential) -> torch.Tensor:
+def reft_forward(x: torch.Tensor, index: torch.Tensor, reft_model: nn.Sequential) -> torch.Tensor:
     """
     Reft forward pass.
     """
 
-    begin_s_indice = begin_s.unsqueeze(-1).expand(-1, -1, x.shape[-1])
-    
-    end_s_indice = end_s.unsqueeze(-1).expand(-1, -1, x.shape[-1])
+    index_s_indice = index.unsqueeze(-1).expand(-1, -1, x.shape[-1])
 
-    prefix_input = torch.gather(x, 1, begin_s_indice)
-    suffix_output = torch.gather(x, 1, end_s_indice)
+    index_input = torch.gather(x, 1, index_s_indice)
 
-    x = torch.scatter_add(x, 1, begin_s_indice, reft_model(prefix_input))
-    x = torch.scatter_add(x, 1, end_s_indice, reft_model(suffix_output))
-    # x = x.scatter_add_(1, begin_s_indice, reft_model(prefix_input))
-    # x = x.scatter_add_(1, end_s_indice, reft_model(suffix_output))
+    reft_out = reft_model(index_input)
+
+    x = torch.scatter_add(x, 1, index_s_indice, reft_out)
 
     return x

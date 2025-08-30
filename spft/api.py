@@ -6,11 +6,12 @@ import json
 import torch
 from torch import nn
 from transformers import TrainerCallback
+from transformers import AutoTokenizer
 from spft.train.args import DataTrainingArguments, ModelArguments, TrainingArguments
 from transformers.modeling_outputs import CausalLMOutputWithPast
 import os
 from .callbacks import SPFTCallback
-from .modules import SPARSITY_MAPPING, SparseModule, SPARSITY_MAPPING_REFT, indice_gen
+from .modules import SPARSITY_MAPPING, SparseModule, SPARSITY_MAPPING_REFT, indice_gen, get_punc_index, compose_reft_index
 from .utils import io, set_submodule
 import peft
 from tqdm import tqdm
@@ -36,7 +37,10 @@ class SPFTConfig:
 
     @classmethod
     def from_file(cls, path: str) -> "SPFTConfig":
-        return cls(**io.load(path))
+        try:
+            return cls(**io.load(path))
+        except Exception:
+            return None
 
     def write_out(self, path: str) -> None:
         io.save(os.path.join(path, "args.json"), vars(self))
@@ -61,7 +65,8 @@ class SPFTConfig:
         setattr(self, "model_max_length", getattr(args[-2], "model_max_length", None))
         setattr(self, "model_id", getattr(args[-3], "model_name_or_path", None))
 
-def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
+
+def _patch_spft_forward(model: nn.Module, tokenizer: AutoTokenizer, config: SPFTConfig) -> None:
     _unpatched_forward = model.forward
 
     def _patched_forward(
@@ -113,6 +118,9 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
                 min_left = left_lengths.min().item()
                 bos_indices = (input_ids == config.BOS_ID).nonzero(as_tuple=True)[1]
                 
+                punc_ids = None
+                if config.reft_punc:
+                    punc_ids = get_punc_index(tokenizer, input_ids, left_lengths)
                 #* Right Bounds
                 right_lengths = is_ctx.flip(dims=[1]).cumprod(dim=1).sum(dim=1).min().item()
                 min_right = labels.shape[-1] - right_lengths if right_lengths > 0 else labels.shape[-1]
@@ -142,7 +150,8 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
                 
                 elif config.padding_side == "left":
                     #* No dense output tokens & left-padding:
-                    masks = (masks, min_left, indice_gen(bos_indices, config.reft_prefix, True), indice_gen(left_lengths, config.reft_suffix, False)) #* For easy slicing.
+                    reft_index = compose_reft_index(bos_indices, left_lengths - 1, config.reft_prefix, config.reft_suffix, punc_ids)
+                    masks = (masks, min_left, reft_index) #* For easy slicing.
                 
             # if not (config.skip_sink_tokens or config.skip_output_tokens or config.skip_random_tokens):
             #     masks = None
@@ -150,9 +159,15 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
         else:
             bos_indices = (input_ids == config.BOS_ID).nonzero(as_tuple=True)[1]
 
-            end_indices = torch.tensor([input_ids.shape[1] for _ in range(input_ids.shape[0])]).to(bos_indices.device)
+            end_indices = torch.tensor([input_ids.shape[1] - 1 for _ in range(input_ids.shape[0])]).to(bos_indices.device)
 
-            masks = (None, None, indice_gen(bos_indices, config.reft_prefix, True), indice_gen(end_indices, config.reft_suffix, False))
+            punc_ids = None
+            if config.reft_punc:
+                punc_ids = get_punc_index(tokenizer, input_ids, end_indices)
+            
+            reft_index = compose_reft_index(bos_indices, end_indices, config.reft_prefix, config.reft_suffix, punc_ids)
+
+            masks = (None, None, reft_index)
 
         for module in self.model.modules():
             if isinstance(module, SparseModule):
@@ -171,7 +186,7 @@ def _patch_spft_forward(model: nn.Module, config: SPFTConfig) -> None:
 
     model.forward = types.MethodType(_patched_forward, model)
     
-def _patch_spft_generate(model: nn.Module, config: SPFTConfig) -> None:
+def _patch_spft_generate(model: nn.Module, tokenizer: AutoTokenizer, config: SPFTConfig) -> None:
     _unpatched_generate = model.generate
 
     def _patched_generate(
@@ -182,9 +197,15 @@ def _patch_spft_generate(model: nn.Module, config: SPFTConfig) -> None:
         
         bos_indices = (args[0] == config.BOS_ID).nonzero(as_tuple=True)[1]
 
-        end_indices = torch.tensor([args[0].shape[1] for _ in range(args[0].shape[0])]).to(bos_indices.device)
+        end_indices = torch.tensor([args[0].shape[1] - 1 for _ in range(args[0].shape[0])]).to(bos_indices.device)
+       
+        punc_ids = None
+        if config.reft_punc:
+            punc_ids = get_punc_index(tokenizer, args[0], end_indices)
+            
+        reft_index = compose_reft_index(bos_indices, end_indices, config.reft_prefix, config.reft_suffix, punc_ids)
 
-        masks = (None, None, indice_gen(bos_indices, config.reft_prefix, True), indice_gen(end_indices, config.reft_suffix, False))
+        masks = (None, None, reft_index)
 
         for module in self.model.modules():
             if isinstance(module, SparseModule):
@@ -197,7 +218,7 @@ def _patch_spft_generate(model: nn.Module, config: SPFTConfig) -> None:
     model.generate = types.MethodType(_patched_generate, model)
 
 
-def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str]) -> nn.Module:
+def get_spft_model(model: nn.Module, tokenizer: AutoTokenizer, config: SPFTConfig, **kwargs: Dict[str, str]) -> nn.Module:
     #* Patching the forward method of lora module
     from .modules import get_module_mapping, lora_forward, lora4bit_forward
     peft.tuners.lora.Linear4bit.forward = lora4bit_forward
@@ -246,8 +267,8 @@ def get_spft_model(model: nn.Module, config: SPFTConfig, **kwargs: Dict[str, str
                         svd_estimators_loaded += 1
             pbar.update(1)
         pbar.set_postfix({"SVD Estimators Loaded": svd_estimators_loaded})
-    _patch_spft_forward(model, config)
-    _patch_spft_generate(model, config)
+    _patch_spft_forward(model, tokenizer, config)
+    _patch_spft_generate(model, tokenizer, config)
 
     return model
 
