@@ -3,7 +3,7 @@ from typing import Any, Optional
 import torch
 from torch import nn
 
-from .base import SparseModule
+from .base import SparseModule, reft_forward
 from liger_kernel.ops.swiglu import LigerSiLUMulFunction
 
 __all__ = ["SparseLlamaMLP"]
@@ -37,7 +37,17 @@ class SparseLlamaMLP(SparseModule):
                     _, self.static_indices = torch.topk(torch.tensor(self.channel_act), int(base.up_proj.out_features * (1 - self.sparsity)), sorted=False)
                     self.static_indices = self.static_indices.to('cuda')
             
-            self.dense_stream, self.sparse_stream = torch.cuda.Stream(), torch.cuda.Stream() 
+            self.dense_stream, self.sparse_stream = torch.cuda.Stream(), torch.cuda.Stream()
+        
+        if cfg.peft == "reft" and cfg.reft_module_out:
+            self.reft = True
+            self.reft_lora = nn.Sequential(
+                                nn.Linear(base.down_proj.out_features, cfg.rank, bias=True),
+                                nn.Dropout(p=0.1),
+                                nn.Linear(cfg.rank, base.down_proj.out_features, bias=False)
+                             )
+            nn.init.zeros_(self.reft_lora[0].weight)
+            nn.init.zeros_(self.reft_lora[2].weight)
 
     def kernel_forward(self, x: torch.Tensor, masks: Optional[torch.Tensor] = None, static_indices = None) -> torch.Tensor:
 
@@ -170,4 +180,11 @@ class SparseLlamaMLP(SparseModule):
             
             return x
         else:
-            return self._forward_block(x)
+            x_out = self._forward_block(x)
+        
+            if self.reft and x.shape[1] > 1:
+                _, _, reft_index = masks
+                
+                x_out = reft_forward(x_out, reft_index, self.reft_lora)
+
+            return x_out

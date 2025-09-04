@@ -21,6 +21,7 @@ from spft.api import SPFTConfig, get_spft_callback, get_spft_model, get_channel_
 from spft.callbacks import EvaluateFirstStepCallback
 from spft.train.args import DataTrainingArguments, ModelArguments, TrainingArguments
 from spft.utils.io import build_runname
+from spft.callbacks import MemoryTimeCallback
 from spft.utils.model import create_model_and_tokenizer, print_trainable_parameters
 import yaml
 import sys
@@ -59,6 +60,7 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
     spft_config.reft_suffix = training_args.reft_suffix
     spft_config.peft = training_args.peft
     spft_config.reft_punc = training_args.reft_punc
+    spft_config.reft_module_out = training_args.reft_module_out
     spft_config.write_out(training_args.output_dir)
     
     callbacks = []
@@ -80,6 +82,8 @@ def main(model_args: ModelArguments, data_args: DataTrainingArguments, training_
     
     if data_dict["eval"] is not None:
         callbacks.append(EvaluateFirstStepCallback())
+    
+    callbacks.append(MemoryTimeCallback())
 
     # Set up data collator
     collator = transformers.DataCollatorForSeq2Seq(

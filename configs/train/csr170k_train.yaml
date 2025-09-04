@@ -9,7 +9,7 @@ eval_strategy: "no"
 save_strategy: "no"
 logging_steps: 1
 logging_strategy: "steps"
-peft: "lora"
+peft: "reft"
 bf16: true
 lora_dropout: 0.0
 ddp_find_unused_parameters: false

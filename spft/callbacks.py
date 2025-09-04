@@ -2,11 +2,15 @@ import transformers
 from torch import nn
 from transformers import TrainerControl, TrainerState, TrainingArguments
 
+import os
 import wandb
+import torch
+import time
+import psutil
 from spft.modules import SparseModule
 from spft.utils.io import rank0_print
 
-__all__ = ["SPFTCallback"]
+__all__ = ["SPFTCallback", "MemoryTimeCallback"]
 
 
 class SPFTCallback(transformers.TrainerCallback):
@@ -56,3 +60,40 @@ class EvaluateFirstStepCallback(transformers.integrations.integration_utils.Trai
     def on_step_end(self, args, state, control, **kwargs):
         if state.global_step == 1:
             control.should_evaluate = True
+
+
+class MemoryTimeCallback(transformers.TrainerCallback):
+    def __init__(self):
+        super().__init__()
+        self.batch_times = []
+        self.max_memory_allocated = 0
+        self.process = psutil.Process(os.getpid())
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.empty_cache()
+        
+    def on_step_begin(self, args, state, control, **kwargs):
+        self.batch_start_time = time.time()
+        
+    def on_step_end(self, args, state, control, **kwargs):
+        batch_time = time.time() - self.batch_start_time
+        self.batch_times.append(batch_time)
+        
+        if torch.cuda.is_available():
+            memory_allocated = torch.cuda.max_memory_allocated() / 1024**3  
+            self.max_memory_allocated = max(self.max_memory_allocated, memory_allocated)
+            
+        if state.global_step % args.logging_steps == 0:
+            print(f"Step {state.global_step}: "
+                  f"Batch time: {batch_time:.3f}s, "
+                  f"Max GPU memory: {self.max_memory_allocated:.2f} GB")
+    
+    def on_train_end(self, args, state, control, **kwargs):
+        if len(self.batch_times) > 0:
+            avg_batch_time = sum(self.batch_times) / len(self.batch_times)
+            print(f"\nTraining completed!")
+            print(f"Average batch time: {avg_batch_time:.3f}s")
+            print(f"Max GPU memory used: {self.max_memory_allocated:.2f} GB")
+            print(f"Total training steps: {state.global_step}")

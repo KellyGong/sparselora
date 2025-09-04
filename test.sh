@@ -20,5 +20,10 @@ CUDA_VISIBLE_DEVICES=1 python spft/test/main.py \
     --model_name_or_path checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/math/dora/math_10k_b16_ep3.0_r4_lr0.0003_peft-dora_dense/41
 
 CUDA_VISIBLE_DEVICES=0 python spft/test/main.py \
-    --dataset gsm8k+svamp+mawps \
-    --model_name_or_path meta-llama/Llama-2-13b-hf
+    --dataset social-iqa+hellaswag+winogrande+arc-easy+arc-challenge+openbookqa \
+    --model_name_or_path checkpoints/NousResearch/Meta-Llama-3-8B-Instruct/csr170k/dora/commonsense_170k_b8_ep1.0_r4_lr0.0003_peft-dora_dense/42
+
+
+CUDA_VISIBLE_DEVICES=0 python spft/test/ttft_test.py \
+    --dataset hellaswag \
+    --model_name_or_path NousResearch/Meta-Llama-3-8B-Instruct

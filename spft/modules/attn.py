@@ -57,30 +57,41 @@ class SparseLlamaFlashAttention(SparseModule):
             rank = kwargs.get("rank", 8)
             self.prefix = kwargs.get("prefix")
             self.suffix = kwargs.get("suffix")
-            self.reft_lora = nn.ModuleDict({
-                "q": nn.Sequential(
-                    nn.Linear(base.q_proj.out_features, rank, bias=True),
-                    nn.Dropout(p=0.1),
-                    nn.Linear(rank, base.q_proj.out_features, bias=False)
-                ),
-                "k": nn.Sequential(
-                    nn.Linear(base.k_proj.out_features, rank, bias=True),
-                    nn.Dropout(p=0.1),
-                    nn.Linear(rank, base.k_proj.out_features, bias=False)
-                ),
-                "v": nn.Sequential(
-                    nn.Linear(base.v_proj.out_features, rank, bias=True),
-                    nn.Dropout(p=0.1),
-                    nn.Linear(rank, base.v_proj.out_features, bias=False)
-                )
-            })
+            self.reft_module_out = cfg.reft_module_out
+            if not self.reft_module_out:
+                self.reft_lora = nn.ModuleDict({
+                    "q": nn.Sequential(
+                        nn.Linear(base.q_proj.out_features, rank, bias=True),
+                        nn.Dropout(p=0.1),
+                        nn.Linear(rank, base.q_proj.out_features, bias=False)
+                    ),
+                    "k": nn.Sequential(
+                        nn.Linear(base.k_proj.out_features, rank, bias=True),
+                        nn.Dropout(p=0.1),
+                        nn.Linear(rank, base.k_proj.out_features, bias=False)
+                    ),
+                    "v": nn.Sequential(
+                        nn.Linear(base.v_proj.out_features, rank, bias=True),
+                        nn.Dropout(p=0.1),
+                        nn.Linear(rank, base.v_proj.out_features, bias=False)
+                    )
+                })
 
-            # zero initialization
-            for key in ["q", "k", "v"]:
-                linear_layer = self.reft_lora[key][0]
-                nn.init.zeros_(linear_layer.weight)
-                linear_layer = self.reft_lora[key][2]
-                nn.init.zeros_(linear_layer.weight)
+                # zero initialization
+                for key in ["q", "k", "v"]:
+                    linear_layer = self.reft_lora[key][0]
+                    nn.init.zeros_(linear_layer.weight)
+                    linear_layer = self.reft_lora[key][2]
+                    nn.init.zeros_(linear_layer.weight)
+            
+            else:
+                self.reft_lora = nn.Sequential(
+                                    nn.Linear(base.o_proj.out_features, rank, bias=True),
+                                    nn.Dropout(p=0.1),
+                                    nn.Linear(rank, base.o_proj.out_features, bias=False)
+                                )
+                nn.init.zeros_(self.reft_lora[0].weight)
+                nn.init.zeros_(self.reft_lora[2].weight)
 
     def kernel_proj_o_forward(self, x, masks, vo_indices):
         
@@ -350,7 +361,7 @@ class SparseLlamaFlashAttention(SparseModule):
 
         _, _, reft_index = masks
 
-        if q_len > 1 and self.reft:
+        if q_len > 1 and self.reft and not self.reft_module_out:
             query_states = reft_forward(query_states, reft_index, self.reft_lora['q'])
             key_states = reft_forward(key_states, reft_index, self.reft_lora['k'])
             value_states = reft_forward(value_states, reft_index, self.reft_lora['v'])
@@ -389,16 +400,9 @@ class SparseLlamaFlashAttention(SparseModule):
 
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
             
-            
-        if self.enabled and self.sparsity > 0 and self.mode == "svd" and q_len > 1:
-            
-            if self.mode == "svd":
-                attn_output = self.kernel_proj_o_forward(attn_output, masks, vo_indices)
-                
-            elif "oracle" in self.mode: 
-                attn_output = self.mask_proj_o_forward(attn_output, masks, vo_indices)
-            
-        else:
-            attn_output = self.o_proj(attn_output)
+        attn_output = self.o_proj(attn_output)
+
+        if q_len > 1 and self.reft and self.reft_module_out:
+            attn_output = reft_forward(attn_output, reft_index, self.reft_lora)
 
         return attn_output, None, past_key_value

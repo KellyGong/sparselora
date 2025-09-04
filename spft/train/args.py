@@ -30,6 +30,7 @@ class TrainingArguments(transformers.TrainingArguments):
     reft_prefix: int = field(default=7)    
     reft_suffix: int = field(default=7)
     reft_punc: bool = field(default=True)
+    reft_module_out: bool = field(default=True)
     
     eval_only: bool = field(default=False)
     #* Store action true

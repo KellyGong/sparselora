@@ -90,6 +90,8 @@ def get_punc_index(tokenizer: AutoTokenizer, input_ids: torch.Tensor, EOS: Optio
 def compose_reft_index(bos: torch.Tensor, eos:torch.Tensor, prefix_num: int, suffix_num: int, punc_ids: Optional[list[list]] = None) -> torch.Tensor:
     """Compose the reft index from the beginning and end indices."""
     
+    device = bos.device
+
     if punc_ids is None:
         reft_index = torch.cat([indice_gen(bos, prefix_num, True),
                                 indice_gen(eos, suffix_num, False)], dim=-1)
@@ -97,7 +99,6 @@ def compose_reft_index(bos: torch.Tensor, eos:torch.Tensor, prefix_num: int, suf
     # Minimum suffix and prefix number is 2, the maximum depend on the punc ids
 
     else:
-        device = bos.device
         reft_index = []
         all_num = prefix_num + suffix_num
         bos, eos = bos.tolist(), eos.tolist()

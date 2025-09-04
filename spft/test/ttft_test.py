@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import time
 
 import torch
 from peft import AutoPeftModelForCausalLM
@@ -145,22 +146,23 @@ def main(args):
     model = model.to(torch.bfloat16)
 
     generation_config = GenerationConfig(
-        max_new_tokens=args.max_new_tokens,
+        max_new_tokens=1,
         pad_token_id=tokenizer.pad_token_id,
     )
 
     metrics = {}
+    times = defaultdict(list)
     results = defaultdict(list)
     for dataset in args.dataset.split("+") if "+" in args.dataset else [args.dataset]:
         eval_path = os.path.join("datasets", dataset, "test.json")
         with open(eval_path) as fd:
             instances = json.load(fd)
-        # instances = instances[dist.rank() :: dist.size()]
 
         num_correct = 0
         num_samples = 0
         miss = 0.001
         for k in trange(0, len(instances), args.batch_size, disable=not dist.is_main(), desc=dataset):
+            start_time = time.time()
             batch = instances[k : k + args.batch_size]
             targets = [instance["answer"] for instance in batch]
 
@@ -169,6 +171,9 @@ def main(args):
             
             with torch.inference_mode():
                 output_ids = model.generate(input_ids, generation_config=generation_config)
+            
+            if k > 32:  # warmup
+                times[dataset].append(time.time() - start_time)
 
             outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
             outputs = [output.split("### Response:")[1].strip() for output in outputs]
@@ -190,20 +195,10 @@ def main(args):
             
             num_samples += len(targets)
 
-
         metrics[dataset] = num_correct / num_samples
 
-        if os.path.exists(args.model_name_or_path):
-            with open(os.path.join(args.model_name_or_path, "metrics.json"), "a+") as metrics_fd:
-                metrics_fd.write(f"{dataset}: {metrics[dataset]}\n")
-        
-        else:
-            raise FileNotFoundError(f"Model path {args.model_name_or_path} does not exist. Please provide a valid model path.")
+        print(f"Average inference time for {dataset}: {sum(times[dataset]) / len(times[dataset]):.4f} seconds") 
 
-    print(tabulate(metrics.items(), headers=["Dataset", "Accuracy"], tablefmt="simple_outline"))
-
-    with open(os.path.join(args.model_name_or_path, "result.json"), "w") as result_fd:
-        json.dump(results, result_fd, indent=4)
 
 
 if __name__ == "__main__":
