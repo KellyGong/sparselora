@@ -1,7 +1,7 @@
 from spft.train.args import DataTrainingArguments, ModelArguments, TrainingArguments
 from peft import LoraConfig, get_peft_model
 import torch
-from liger_kernel.transformers import apply_liger_kernel_to_llama
+
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from .io import rank0_print
 
@@ -13,7 +13,19 @@ def create_model_and_tokenizer(model_args: ModelArguments, data_args: DataTraini
     if training_args.enable_unsloth:
         return unsloth_initialize(model_args, data_args, training_args)
     
-    apply_liger_kernel_to_llama(
+    llama_usage = True if "Qwen" not in model_args.model_name_or_path else False
+    
+    # apply_liger_kernel_to_llama(
+    #         rope=True,
+    #         swiglu=False,
+    #         cross_entropy=True,
+    #         fused_linear_cross_entropy=False,
+    #         rms_norm=True
+    #     )
+
+    if llama_usage:
+        from liger_kernel.transformers import apply_liger_kernel_to_llama
+        apply_liger_kernel_to_llama(
             rope=True,
             swiglu=False,
             cross_entropy=True,
@@ -41,7 +53,7 @@ def create_model_and_tokenizer(model_args: ModelArguments, data_args: DataTraini
             model_args.model_name_or_path,
             attn_implementation="flash_attention_2",
             torch_dtype=torch.bfloat16,
-        )
+        ).to('cuda')
     
     # Set up tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -51,7 +63,7 @@ def create_model_and_tokenizer(model_args: ModelArguments, data_args: DataTraini
         use_fast=False,
     )
     
-    if len(tokenizer) > 32000: #* Llama3
+    if len(tokenizer) > 32000 and llama_usage: #* Llama3
         print("Using LLaMA 3 tokenizer")
         tokenizer.pad_token = "<|reserved_special_token_0|>"
         tokenizer.pad_token_id = 128002

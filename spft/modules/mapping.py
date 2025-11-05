@@ -4,6 +4,7 @@ from .mlp import SparseLlamaMLP
 from .linear import SparseLinear
 from .linear4bit import SparseLinear4bit
 from transformers.models.llama.modeling_llama import LlamaMLP
+from transformers.models.qwen3.modeling_qwen3 import Qwen3MLP, Qwen3Attention
 
 __all__ = ["get_module_mapping", "SPARSITY_MAPPING"]
 
@@ -15,12 +16,14 @@ def get_module_mapping(config, enable_unsloth: bool = False):
     """
     
     if not enable_unsloth:
-        from transformers.models.llama.modeling_llama import LlamaFlashAttention2
-        from .attn import SparseLlamaFlashAttention
+        from transformers.models.llama.modeling_llama import LlamaAttention
+        from .attn import SparseLlamaFlashAttention, SparseQwen3Attention
         SPFT_MODULE_MAPPING = {
             LlamaMLP: SparseLlamaMLP,
             nn.Linear: SparseLinear,
-            LlamaFlashAttention2: SparseLlamaFlashAttention,
+            LlamaAttention: SparseLlamaFlashAttention,
+            Qwen3MLP: SparseLlamaMLP,
+            Qwen3Attention: SparseQwen3Attention,
             #* QLoRA mappings
             bnb.nn.modules.Linear4bit: SparseLinear4bit,
             

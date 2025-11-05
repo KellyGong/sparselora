@@ -5,6 +5,7 @@ import re
 
 import torch
 from peft import AutoPeftModelForCausalLM
+from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from tabulate import tabulate
 from tqdm import trange
 from collections import defaultdict
@@ -72,12 +73,9 @@ def main(args):
     # torch.cuda.set_device(devices[0])
     # max_memory = {device: torch.cuda.get_device_properties(device).total_memory for device in devices}
 
-    spft_config = SPFTConfig.from_file(os.path.join(args.model_name_or_path, 'args.json'))
-    channel_acts = load_channel_act_file(args.act_channel) if args.act_channel else None
-
     llama_usage = True if "Qwen" not in args.model_name_or_path else False
 
-    model = AutoPeftModelForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
     args.model_name_or_path,
     attn_implementation="flash_attention_2",
     torch_dtype=torch.bfloat16,
@@ -86,7 +84,7 @@ def main(args):
     ).to('cuda')
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model.peft_config["default"].base_model_name_or_path,
+        args.model_name_or_path,
         model_max_length=512,
         padding_side="left",
         use_fast=False,
@@ -97,15 +95,8 @@ def main(args):
         tokenizer.pad_token = "<|reserved_special_token_0|>"
         tokenizer.pad_token_id = 128002
     
-    if tokenizer.pad_token is None:
-        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-
-    spft_config.padding_side = tokenizer.padding_side
-
-    # model = get_spft_model(model, spft_config, channel_acts=channel_acts, 
-    #                        enable_static=args.enable_static, 
-    #                        enable_unsloth=False)
-
+    # if tokenizer.pad_token is None:
+    #     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     
     generation_config = GenerationConfig(
         max_new_tokens=args.max_new_tokens,
@@ -154,41 +145,18 @@ def main(args):
             
             num_samples += len(targets)
 
-
         metrics[dataset] = num_correct / num_samples
 
-        if os.path.exists(args.model_name_or_path):
-            with open(os.path.join(args.model_name_or_path, "metrics.json"), "a+") as metrics_fd:
-                metrics_fd.write(f"{dataset}: {metrics[dataset]}\n")
-        
-        else:
-            raise FileNotFoundError(f"Model path {args.model_name_or_path} does not exist. Please provide a valid model path.")
-
     print(tabulate(metrics.items(), headers=["Dataset", "Accuracy"], tablefmt="simple_outline"))
-
-    with open(os.path.join(args.model_name_or_path, "result.json"), "w") as result_fd:
-        json.dump(results, result_fd, indent=4)
-
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name_or_path", type=str, required=True)
-    parser.add_argument("--spft", type=str, default=None)
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--max_new_tokens", type=int, default=32)
-    parser.add_argument("--enable_static", type=bool, default=False)
-    parser.add_argument("--act_channel", type=str, default=None)
 
-    # parser.add_argument("--base_path", type=str)
-    #* WeLore args
-    # parser.add_argument("--we_lore", type=int, default=0)
-    # parser.add_argument("--we_lore_path_rank_k_checkpoint", type=str)
-    # parser.add_argument("--we_lore_singular_value_path", type=str)
-    # parser.add_argument("--we_lore_model_rank", type=int, default=50)
-    # parser.add_argument("--we_lore_min_ratio", type=float, default=0.4999)
-    
     args = parser.parse_args()
 
     main(args)

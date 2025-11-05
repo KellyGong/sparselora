@@ -86,17 +86,19 @@ def verify_predictors(args, mode, mlp_layers, attn_layers):
         console.print("\n[bold green]🎉 All required SVD predictors are available![/bold green]")
     else:
         console.print("\n[bold red]⚠ Some predictors are still missing after download.[/bold red]")
+
+        # console.print("\n[bold red]⚠ Some predictors are still missing after download.[/bold red]")
         
-        create_preds = console.input("[yellow]Do you want to create missing predictors? (yes/no): ").strip().lower()
-        if create_preds == "yes":
-            console.print("[yellow]⚠ Creating missing predictors...this may take some time.[/yellow]")
-            # Here you would implement the logic to create the missing predictors
+        # create_preds = console.input("[yellow]Do you want to create missing predictors? (yes/no): ").strip().lower()
+        # if create_preds == "yes":
+        console.print("[yellow]⚠ Creating missing predictors...this may take some time.[/yellow]")
+        # Here you would implement the logic to create the missing predictors
+        
+        create_predictor(args)
             
-            create_predictor(args)
-            
-        else:
-            console.print("[bold red]Exiting without creating predictors.[/bold red]")
-            sys.exit(1)
+        # else:
+        #     console.print("[bold red]Exiting without creating predictors.[/bold red]")
+        #     sys.exit(1)
         
         
 def create_predictor(args):

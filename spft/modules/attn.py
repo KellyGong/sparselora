@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
 
 import torch
 from torch import nn
@@ -7,9 +7,17 @@ from transformers.cache_utils import Cache, StaticCache
 from transformers.modeling_flash_attention_utils import _flash_attention_forward
 
 from .base import SparseModule
-from liger_kernel.transformers import liger_rotary_pos_emb 
+from liger_kernel.transformers import liger_rotary_pos_emb
+from transformers.processing_utils import Unpack
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
+from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb, eager_attention_forward
 
-__all__ = ["SparseLlamaFlashAttention"]
+from transformers.utils import logging
+
+logger = logging.get_logger(__name__)
+
+__all__ = ["SparseLlamaFlashAttention", "SparseQwen3Attention"]
 
 
 class SparseLlamaFlashAttention(SparseModule):
@@ -370,3 +378,125 @@ class SparseLlamaFlashAttention(SparseModule):
             attn_output = self.o_proj(attn_output)
 
         return attn_output, None, past_key_value
+
+
+
+class SparseQwen3Attention(SparseLlamaFlashAttention):
+    inherited_attributes = [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "q_norm",
+        "k_norm",
+        "scaling",
+        "layer_idx",
+        "head_dim",
+        "num_key_value_groups",
+        "attention_dropout",
+        "is_causal",
+        "sliding_window",
+        "config"
+    ]
+
+    def __init__(self, base: nn.Module, *, name: str, idx: int, sparsity: float = 0, cfg, **kwargs) -> None:
+        super().__init__(base=base,
+                         name=name,
+                         idx=idx,
+                         sparsity=sparsity,
+                         cfg=cfg,
+                         kwargs=kwargs)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[torch.Tensor],
+        past_key_value: Optional[Cache] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        masks: Optional[torch.Tensor] = None,
+        **kwargs: Unpack[FlashAttentionKwargs],
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+
+        bsz, q_len, _ = hidden_states.size()
+
+        if self.enabled and self.sparsity > 0 and q_len > 1:
+
+            if self.mode == "svd":
+
+                if not hasattr(self, "static_indices"):
+                    indices = self.pred_attn(hidden_states)
+                    query_states, key_states, value_states = self.kernel_proj_forward(hidden_states, masks, indices)
+
+                    if self.enable_static:
+                        for zip_key, indice in zip(self.channel_act.keys(), indices):
+                            self.channel_act[zip_key][indice.to('cpu')] += 1.0
+                
+                else:
+                    indices = (self.static_indices["q"], self.static_indices["k"], self.static_indices["v"])
+                    query_states, key_states, value_states = self.kernel_proj_forward(hidden_states, masks, indices)
+
+                vo_indices = indices[2]
+            
+            else:
+                raise NotImplementedError
+        
+        else:
+            query_states = self.q_proj(hidden_states)
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
+        
+        query_states = self.q_norm(query_states.view(hidden_shape)).transpose(1, 2)
+        key_states = self.k_norm(key_states.view(hidden_shape)).transpose(1, 2)
+        value_states = value_states.view(hidden_shape).transpose(1, 2)
+
+        # query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+        # key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+        # value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_value is not None:
+            # sin and cos are specific to RoPE models; cache_position needed for the static cache
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        attention_interface: Callable = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
+                logger.warning_once(
+                    "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
+                    'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
+                )
+            else:
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        attn_output, attn_weights = attention_interface(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            sliding_window=self.sliding_window,  # diff with Llama
+            **kwargs,
+        )
+
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+
+        if self.enabled and self.sparsity > 0 and self.mode == "svd" and q_len > 1:
+            
+            if self.mode == "svd":
+                attn_output = self.kernel_proj_o_forward(attn_output, masks, vo_indices)
+                
+            else:
+                raise NotImplementedError
+            
+        else:
+            attn_output = self.o_proj(attn_output)
+
+        return attn_output, attn_weights
