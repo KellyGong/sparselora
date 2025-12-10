@@ -18,7 +18,7 @@ __pycache__/
 Thumbs.db
 
 # Ignore data and run directories
-datasets/
+# datasets/
 checkpoints/
 checkpoint/
 data_cache/
